@@ -1,0 +1,30 @@
+# Dependencies (dev-only; the extension itself has no runtime dependencies)
+node_modules/
+
+# Local npm cache used by the Tailwind build (npm_config_cache=.npm-cache)
+.npm-cache/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Python bytecode from tools/make-icons.py
+__pycache__/
+*.py[cod]
+
+# Local environment / secrets
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# NOTE: build outputs are intentionally committed, not ignored:
+#   src/popup/tailwind.css  - compiled stylesheet the popup links directly
+#   src/icons/icon16.png, icon48.png, icon128.png - rendered from tools/make-icons.py
+# See "Styling" and "Icons" in README.md before adding them here.

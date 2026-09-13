@@ -1,0 +1,68 @@
+/*
+ * Source stylesheet for the popup.
+ *
+ * This file is NOT loaded by the extension. It is compiled to `tailwind.css`, which is:
+ *
+ *   npm_config_cache=.npm-cache npx --yes @tailwindcss/cli@4 -i src/popup/tailwind.input.css \
+ *     -o src/popup/tailwind.css --minify
+ *
+ * Tailwind's browser build (the `cdn.jsdelivr.net` <script> from the docs) cannot be used inside the
+ * popup: an MV3 extension page is served with `script-src 'self'` and Chrome rejects remote script
+ * origins, so the CDN script would simply be blocked and the popup would render unstyled. Building
+ * the CSS at development time keeps the popup a static page with no runtime dependency.
+ */
+@import "tailwindcss" source(none);
+
+/* `source(none)` turns off automatic project-wide scanning; these are the only files that make up
+   the popup, so these are the only files worth scanning for class names. */
+@source "./popup.html";
+@source "./popup.js";
+
+/* The handful of atoms that repeat across the markup and the DOM built in popup.js. Class names are
+   written literally wherever they are used: Tailwind reads this file, `popup.html` and `popup.js` as
+   plain text, so a name assembled at runtime would never be generated. */
+@layer components {
+  .section-title {
+    @apply mb-2 flex items-baseline justify-between text-xs font-semibold tracking-wide text-slate-500 uppercase;
+  }
+
+  .hint {
+    @apply font-normal tracking-normal normal-case;
+  }
+
+  .card {
+    @apply mb-1.5 rounded-lg border border-slate-200 bg-white p-2 shadow-xs;
+  }
+
+  .pill {
+    @apply rounded-full border border-slate-200 bg-slate-100 px-1.5 text-[11px] whitespace-nowrap;
+  }
+
+  .pill-warn {
+    @apply border-red-200 bg-red-50 text-red-700;
+  }
+
+  .btn {
+    @apply cursor-pointer rounded-md border border-slate-200 bg-white px-2 py-1 text-[13px] text-slate-800 transition-colors hover:bg-slate-100 disabled:cursor-default disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply border-sky-700 bg-sky-700 text-white hover:bg-sky-800;
+  }
+
+  .btn-link {
+    @apply border-transparent bg-transparent p-0 text-sky-700 hover:bg-transparent hover:underline;
+  }
+
+  .btn-link-danger {
+    @apply text-red-700;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[13px] text-slate-800 focus:border-sky-600 focus:ring-2 focus:ring-sky-600/20 focus:outline-none;
+  }
+
+  .empty {
+    @apply m-0 mt-1 text-xs text-slate-500;
+  }
+}

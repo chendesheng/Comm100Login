@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Comm100 Auto Login",
+  "version": "1.0.0",
+  "description": "Silently signs in to Comm100 test dashboards with saved credentials, preferring the most recently used account.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage",
+    "cookies",
+    "activeTab",
+    "alarms",
+    "webNavigation",
+    "webRequest",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "https://*.comm100dev.io/*",
+    "https://*.comm100.io/*",
+    "https://*.comm100staging.com/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.comm100dev.io/*",
+        "https://*.comm100.io/*",
+        "https://*.comm100staging.com/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "src/content/content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Comm100 Auto Login",
+    "default_icon": {
+      "16": "src/icons/icon16.png",
+      "48": "src/icons/icon48.png",
+      "128": "src/icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "src/icons/icon16.png",
+    "48": "src/icons/icon48.png",
+    "128": "src/icons/icon128.png"
+  }
+}

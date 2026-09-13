@@ -1,0 +1,14 @@
+{
+  "name": "comm100-auto-login",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension that signs in to Comm100 test dashboards. This file exists only for the Tailwind build step; the extension itself has no runtime dependencies.",
+  "scripts": {
+    "build:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --minify",
+    "watch:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "tailwindcss": "^4.3.3"
+  }
+}

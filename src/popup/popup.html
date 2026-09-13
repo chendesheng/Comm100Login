@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Comm100 Auto Login</title>
+    <!-- `tailwind.css` is built from `tailwind.input.css` (see "Styling" in the README). Tailwind's
+         browser build is deliberately not used: an MV3 extension page may only run scripts from its
+         own package, so a CDN <script> would be blocked and the popup would render unstyled. -->
+    <link rel="stylesheet" href="tailwind.css" />
+  </head>
+  <body class="m-0 w-[360px] bg-white font-sans text-[13px] leading-snug text-slate-800 antialiased">
+    <header class="border-b border-slate-200 bg-slate-100/80 px-3.5 py-3">
+      <div class="text-sm font-semibold text-slate-900">Comm100 Auto Login</div>
+      <div id="host" class="mt-0.5 break-all text-xs text-slate-500">…</div>
+      <div id="session" class="mt-1.5 text-xs text-slate-500">…</div>
+      <div
+        id="refusal"
+        hidden
+        class="mt-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] leading-snug text-red-700"
+      ></div>
+    </header>
+
+    <!-- Only shown when a host is held back: paused after a rejected password, or suppressed after a
+         sign-out. There is no auto-login switch — signing in is the whole extension, so turning it
+         off means disabling the extension. -->
+    <section id="pause-notice" hidden class="border-b border-amber-200 bg-amber-50 px-3.5 py-2.5">
+      <button type="button" id="reenable" class="btn btn-link text-xs font-medium">
+        Re-enable auto-login
+      </button>
+    </section>
+
+    <section class="border-b border-slate-200 px-3.5 py-2.5">
+      <div class="section-title">
+        <span>Accounts</span>
+        <span class="hint" id="order-hint">newest first</span>
+      </div>
+      <div class="mb-2 grid gap-1">
+        <select id="filter-domain" class="field cursor-pointer" aria-label="Filter accounts by dashboard"></select>
+        <select id="filter-site" class="field cursor-pointer" aria-label="Filter accounts by site id"></select>
+      </div>
+      <ul class="m-0 max-h-[240px] list-none overflow-y-auto p-0" id="accounts"></ul>
+      <p class="empty" id="empty">No saved accounts yet.</p>
+      <p class="empty" id="filter-empty" hidden>No accounts match these filters.</p>
+      <p class="empty" id="domain-hint" hidden></p>
+    </section>
+
+    <!-- Feedback for the account-row actions (a failed sign-in, an edit that verified, an import).
+         Hidden while empty so it costs nothing when there is nothing to say. -->
+    <p id="status" hidden class="px-3.5 pt-2 text-xs text-slate-500"></p>
+
+    <footer class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-2.5">
+      <button type="button" id="export" class="btn btn-link">Export</button>
+      <button type="button" id="import" class="btn btn-link">Import</button>
+      <button type="button" id="export-activity" class="btn btn-link">Export activity</button>
+      <input type="file" id="import-file" accept="application/json" hidden />
+      <button type="button" id="clear-all" class="btn btn-link btn-link-danger">Clear all data</button>
+      <p class="m-0 w-full text-[11px] text-slate-500">
+        Passwords are stored unencrypted in this browser profile only
+        (<code class="rounded bg-slate-100 px-1">chrome.storage.local</code>), never synced.
+      </p>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
