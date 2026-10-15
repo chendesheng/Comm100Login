@@ -1,4 +1,4 @@
-# Dependencies (dev-only; the extension itself has no runtime dependencies)
+# Dependencies (CLI and development; the extension has no runtime dependencies)
 node_modules/
 
 # Local npm cache used by the Tailwind build (npm_config_cache=.npm-cache)

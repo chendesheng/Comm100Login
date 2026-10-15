@@ -95,9 +95,9 @@ function withSite(account, routes) {
   return account;
 }
 
-export async function getState() {
-  const raw = await chrome.storage.local.get(KEY);
-  const state = raw && typeof raw[KEY] === 'object' && raw[KEY] !== null ? raw[KEY] : {};
+/** Shared by the extension and the CLI's read-only Chrome database reader. */
+export function normalizeState(raw) {
+  const state = raw && typeof raw === 'object' ? raw : {};
   const routes = state.routes && typeof state.routes === 'object' ? state.routes : {};
   return {
     version: 1,
@@ -109,6 +109,11 @@ export async function getState() {
     hostState: state.hostState && typeof state.hostState === 'object' ? state.hostState : {},
     events: Array.isArray(state.events) ? state.events : []
   };
+}
+
+export async function getState() {
+  const raw = await chrome.storage.local.get(KEY);
+  return normalizeState(raw && raw[KEY]);
 }
 
 /**

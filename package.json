@@ -2,11 +2,19 @@
   "name": "comm100-auto-login",
   "version": "1.0.0",
   "private": true,
-  "description": "Chrome extension that signs in to Comm100 test dashboards. This file exists only for the Tailwind build step; the extension itself has no runtime dependencies.",
+  "type": "module",
+  "description": "Comm100 auto-login extension and account CLI. The extension has no runtime dependencies; the CLI uses classic-level.",
+  "bin": {
+    "comm100-accounts": "bin/comm100-accounts.mjs"
+  },
+  "engines": { "node": ">=22" },
   "scripts": {
-    "test": "node test/harness.mjs && node test/request-hook.mjs && node test/cookie-budget.mjs",
+    "test": "node test/harness.mjs && node test/request-hook.mjs && node test/cookie-budget.mjs && node --test test/accounts-cli.test.mjs",
     "build:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --minify",
     "watch:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --watch"
+  },
+  "dependencies": {
+    "classic-level": "^3.0.0"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",

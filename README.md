@@ -6,6 +6,57 @@ using the login HTTP API rather than the sign-in form. You get the dashboard, no
 It remembers multiple accounts — **one per dashboard** — and always uses the **most recently used**
 one for the site you are on.
 
+## Terminal account tool
+
+Requires Node.js 22 or later. Install dependencies and link the executable from this checkout:
+
+```bash
+npm install
+npm link
+```
+
+```bash
+comm100-accounts list
+comm100-accounts list --domain=livechat6dash.testing.comm100dev.io --siteId=10010
+comm100-accounts list --siteId=10010
+comm100-accounts list --show-password
+
+comm100-accounts login agent@example.com
+comm100-accounts login agent@example.com --siteId=10010
+comm100-accounts login agent@example.com --domain=livechat6dash.testing.comm100dev.io
+```
+
+`list` prints unique rows in `siteId`, email, domain order. Site IDs are padded to 12 characters and
+emails to 30 characters, separated by a space; longer values are preserved. Unknown sites or domains
+appear as `-`. Domain and site filters are optional. `login` prints only
+the JWT, so it can be captured with `token="$(comm100-accounts login agent@example.com)"`. Errors go
+to stderr with a nonzero exit status.
+
+`list --show-password` inserts the saved password as the third column, after email, padded to
+20 characters. It uses the same password as `login`: verified password first, otherwise the pending
+password. Missing passwords appear as `-`; longer passwords are printed in full.
+
+An email or explicit site ID is usually enough to select an account. If the email matches multiple
+site IDs across different dashboards, the default domain is `${NAMESPACE}dash.testing.comm100dev.io`.
+For example, `NAMESPACE=livechat6 comm100-accounts login agent@example.com` selects the livechat6
+dashboard. A unique match does not require `NAMESPACE`. Explicit `--domain` always takes precedence;
+multiple sites remaining on the same dashboard require `--siteId`. Among records for the same site,
+the most recently used account is preferred.
+
+The CLI discovers this extension in Chrome's `Default` profile. Use `--profile="/path/to/Profile 1"`
+to select another Chrome profile, or `--db="/path/to/Local Extension Settings/EXTENSION_ID"` to select
+its LevelDB directory directly. It reads a temporary copy and leaves the source database untouched,
+so Chrome can remain open. If copying races Chrome's database compaction, it retries up to three
+times; a persistent read failure asks you to quit Chrome and retry.
+
+The most recent JWT for each email/domain/site is stored in
+`~/.config/comm100-accounts/tokens.json` (under `$XDG_CONFIG_HOME` when set). Use `--token-file=PATH`
+to override it. This file has mode `0600`, contains no saved passwords, and is separate from Chrome's
+database. A valid cached JWT is returned without a network request; a missing or expired JWT triggers
+one login attempt and replaces that account's cached token. Both the JWT's `exp` and the server's
+expiry time are checked. Two-factor accounts require browser sign-in. No browser cookies or saved
+passwords are changed, and failed credentials are never automatically retried.
+
 ## How it works
 
 Sign-in happens in the service worker. Three requests, verified live against
