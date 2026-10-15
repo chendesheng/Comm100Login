@@ -63,6 +63,28 @@
       }
     });
 
+  // MAIN-world code cannot call extension APIs. Only forward same-origin API requests;
+  // the worker validates the browser-provided sender again and never returns credentials.
+  window.addEventListener('message', async (event) => {
+    const data = event.data;
+    if (event.source !== window || event.origin !== location.origin ||
+        data?.source !== 'comm100-request-hook' || data.type !== 'session-request' ||
+        typeof data.id !== 'string') return;
+    let target;
+    try { target = new URL(data.url, location.href); } catch { return; }
+    if (target.origin !== location.origin || !target.pathname.startsWith('/api/') ||
+        target.pathname.toLowerCase().startsWith('/api/login/')) return;
+    const result = await send({
+      type: 'requestSession',
+      url: target.href,
+      rejectedToken: typeof data.rejectedToken === 'string' ? data.rejectedToken : null
+    });
+    window.postMessage({
+      source: 'comm100-session-bridge', type: 'session-response', id: data.id,
+      ok: Boolean(result?.ok), jwt: result?.ok ? result.jwt : null
+    }, location.origin);
+  });
+
   // ------------------------------------------------------------- form helpers
 
   const findEmailInput = () => document.querySelector('input[name="email"], input[type="email"]');

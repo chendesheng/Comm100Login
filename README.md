@@ -8,7 +8,7 @@ one for the site you are on.
 
 ## How it works
 
-Everything happens in the service worker. Three requests, verified live against
+Sign-in happens in the service worker. Three requests, verified live against
 `livechat6dash.testing.comm100dev.io`:
 
 | # | Request | Purpose |
@@ -23,6 +23,28 @@ to persist `Set-Cookie`, so the outcome is verified rather than assumed.
 
 Once the cookie exists, the normal navigation you asked for simply renders authenticated. The sign-in
 page is never opened, filled, or clicked.
+
+### Intercepting API requests
+
+At `document_start`, a script in the page's main JavaScript world wraps `fetch` and asynchronous
+`XMLHttpRequest`. For same-origin `/api/*` requests, it waits for the service worker to obtain a
+usable JWT before sending, then replaces (or adds) `Authorization: Bearer …`. This also covers a
+page holding an expired token in memory, or a cookie deleted immediately after the last login.
+Concurrent requests for the same dashboard and site share a login attempt.
+
+If the server returns HTTP 401 despite a locally valid token, the hook renews it and retries once
+before delivering the response to the app. It preserves the method, body and other request headers;
+403 responses are passed through. Login endpoints, other origins and synchronous XHR are excluded.
+Without a usable saved credential, the original request proceeds so the app can handle sign-in.
+Explicit sign-out suppression, rejected-password pauses and renewal limits still apply.
+
+The content script relays these requests to the worker; passwords are never sent to the page hook.
+Background cookie monitoring and header rules remain as backstops, but cannot themselves pause a
+page request while signing in. After changing the extension, reload it in `chrome://extensions`
+and refresh existing dashboard tabs so they load the request hook.
+
+Run `npm test` for the offline background and request-hook checks. These checks stub Chrome and
+network boundaries; live dashboard behavior still needs verification after reloading the extension.
 
 ### Credentials belong to a dashboard
 

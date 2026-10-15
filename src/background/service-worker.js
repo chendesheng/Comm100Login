@@ -45,7 +45,7 @@ import * as store from '../shared/storage.js';
  */
 const QUIET_OUTCOMES = new Set(['cooldown', 'paused', 'logged-out', 'no-account']);
 
-/** host -> in-flight promise, so concurrent tabs share one login attempt. */
+/** host + site -> in-flight promise, so concurrent tabs share one login attempt. */
 const inFlight = new Map();
 
 /**
@@ -65,12 +65,10 @@ function rememberSession(host, siteId, expiresAt, jwt = null) {
   sessionCache.set(sessionKey(host, siteId), { until, jwt: jwt || previous.jwt || null });
 }
 
-/** The token we are holding for this site, falling back to whatever is in the cookie jar. */
+/** Read the current cookie; a cached token can outlive a manual sign-in or cookie replacement. */
 async function tokenFor(host, siteId) {
-  const entry = sessionCache.get(sessionKey(host, siteId));
-  if (entry && entry.jwt) return entry.jwt;
   const name = tokenCookieName(siteId);
-  const cookie = (await getCookie(`https://${host}`, name)) || (await getCookie(`http://${host}`, name));
+  const cookie = await getCookie(dashboardOriginFor(host), name);
   return cookie && cookie.value ? cookie.value : null;
 }
 
@@ -95,6 +93,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     try {
       switch (type) {
+        case 'requestSession':
+          sendResponse(await requestSession(message, sender));
+          break;
         case 'ensureAuth':
           sendResponse(
             await ensureAuth({
@@ -146,6 +147,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---------------------------------------------------------------- session
+
+// The page hook owns retries for these documents. The non-blocking webRequest backstop
+// must not race it and start a second renewal for the same rejected request.
+const guardedFrames = new Set();
+const requestRenewals = new Map();
+const frameKey = (details) => `${details.tabId}|${details.frameId ?? 0}`;
+
+async function requestSession(message, sender) {
+  let page, target;
+  try {
+    page = new URL(sender.url);
+    target = new URL(message.url);
+  } catch {
+    return { ok: false, reason: 'invalid-request' };
+  }
+  if (sender.tab?.id == null || page.origin !== target.origin || !routeOriginFor(page.host) ||
+      !/^\/(?:ui(?:\/|$)|login\/?$|$)/i.test(page.pathname) ||
+      !target.pathname.startsWith('/api/') || /^\/api\/login\//i.test(target.pathname)) {
+    return { ok: false, reason: 'unsupported-request' };
+  }
+  guardedFrames.add(frameKey({ tabId: sender.tab.id, frameId: sender.frameId }));
+  const state = await store.getState();
+  if (store.isSuppressed(state, page.host)) return { ok: false, reason: 'logged-out' };
+  if (state.hostState[page.host]?.paused) return { ok: false, reason: 'paused' };
+  const options = {
+    domain: page.host, url: page.href, tabId: sender.tab.id,
+    siteId: siteIdFromUrl(page.href) || store.normalizeSiteId(target.searchParams.get('siteId')),
+    minRemainingMs: JWT_SKEW_MS, force: true
+  };
+  let result = await ensureAuth(options);
+  if (!result.ok) return { ok: false, reason: result.reason };
+  let jwt = await tokenFor(page.host, result.siteId);
+  if (message.rejectedToken && jwt === message.rejectedToken) {
+    const now = Date.now();
+    const recent = (requestRenewals.get(page.host) || []).filter((at) => now - at < REAUTH_WINDOW_MS);
+    if (!inFlight.has(`${page.host}|${result.siteId}`)) {
+      if (recent.length >= MAX_REAUTH_PER_WINDOW) return { ok: false, reason: 'retry-limit' };
+      recent.push(now);
+      requestRenewals.set(page.host, recent);
+    }
+    result = await ensureAuth({ ...options, force: true, forceRefresh: true, rejectedToken: jwt });
+    if (!result.ok) return { ok: false, reason: result.reason };
+    jwt = await tokenFor(page.host, result.siteId);
+  }
+  return { ok: Boolean(jwt), jwt };
+}
 
 async function sessionStatus(origin, siteId = null) {
   if (!origin) return { signedIn: false, reason: 'no-origin' };
@@ -209,6 +256,7 @@ async function ensureAuth({
   url = null,
   minRemainingMs = 0,
   forceRefresh = false,
+  rejectedToken = null,
   ignoreCooldown = false
 }) {
   const targetHost = resolveDomain(domain, url, hostname || host);
@@ -219,8 +267,19 @@ async function ensureAuth({
 
   const urlSiteId = siteId || siteIdFromUrl(url);
 
-  const existing = inFlight.get(targetHost);
-  if (existing) return existing;
+  const flightKey = `${targetHost}|${urlSiteId || ''}`;
+  const existing = inFlight.get(flightKey);
+  if (existing) {
+    const result = await existing;
+    // A proactive check may already have been in progress when a 401 arrived. That check
+    // can return the rejected cookie, so follow it with the requested conditional renewal.
+    if (forceRefresh && rejectedToken && result.ok &&
+        await tokenFor(targetHost, result.siteId) === rejectedToken) {
+      return ensureAuth({ domain: targetHost, siteId: urlSiteId, tabId, force, userInitiated,
+        minRemainingMs, forceRefresh, rejectedToken, ignoreCooldown });
+    }
+    return result;
+  }
 
   const task = runEnsureAuth({
     targetHost,
@@ -231,6 +290,7 @@ async function ensureAuth({
     urlSiteId,
     minRemainingMs,
     forceRefresh,
+    rejectedToken,
     ignoreCooldown
   })
     .then(async (result) => {
@@ -247,9 +307,9 @@ async function ensureAuth({
       return result;
     })
     .finally(() => {
-      inFlight.delete(targetHost);
+      inFlight.delete(flightKey);
     });
-  inFlight.set(targetHost, task);
+  inFlight.set(flightKey, task);
   return task;
 }
 
@@ -430,6 +490,7 @@ async function runEnsureAuth({
   urlSiteId,
   minRemainingMs = 0,
   forceRefresh = false,
+  rejectedToken = null,
   ignoreCooldown = false
 }) {
   const state = await store.getState();
@@ -481,7 +542,7 @@ async function runEnsureAuth({
   // still looked fine locally).
   const lapsing =
     current.ok &&
-    (forceRefresh ||
+    ((forceRefresh && (!rejectedToken || await tokenFor(targetHost, site.siteId) === rejectedToken)) ||
       (minRemainingMs > 0 && current.expiresAt !== null && current.expiresAt - Date.now() < minRemainingMs));
   if (current.ok && !lapsing) {
     // Deliberately before the gate below. A live session for this site is *proof* — of the password,
@@ -636,11 +697,17 @@ async function logout(origin, host) {
     log('logout request failed, clearing cookies anyway', err);
   }
 
-  const removed = await clearSessionCookies(origin);
   if (host) {
     await store.noteLogout(String(host).toLowerCase());
+    const ids = ruleIds.get(String(host).toLowerCase());
+    if (ids && chrome.declarativeNetRequest) {
+      await headerRulesReady;
+      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [ids.set, ids.allow] });
+      publishedHeaders.delete(String(host).toLowerCase());
+    }
     await setBadge(null);
   }
+  const removed = await clearSessionCookies(origin);
   log('logged out', origin, 'apiOk', apiOk, 'removed', removed);
   return { ok: removed.length > 0 || apiOk, apiOk, status, removed };
 }
@@ -926,6 +993,8 @@ function watchApiResponses() {
       const host = parsed.host.toLowerCase();
       if (!isSupportedHost(host) || !routeOriginFor(host)) return;
       if (!parsed.pathname.startsWith('/api/')) return;
+      if (parsed.pathname.toLowerCase().startsWith('/api/login/')) return;
+      if (guardedFrames.has(frameKey(details))) return;
       handleAuthFailure(host, details.url).catch((err) => log('auth-failure handling failed', err));
     },
     { urls: WATCHED_URLS }
@@ -968,6 +1037,7 @@ function watchOutgoingRequests() {
       if (!parsed.pathname.startsWith('/api/')) return;
       // The sign-in calls themselves carry no session, so they are not evidence of a bad one.
       if (parsed.pathname.startsWith('/api/login/')) return;
+      if (guardedFrames.has(frameKey(details))) return;
 
       const cookieHeader = (details.requestHeaders || [])
         .filter((header) => header.name && header.name.toLowerCase() === 'cookie')
@@ -1090,6 +1160,7 @@ function watchNavigations() {
  */
 const DNR_RULE_BASE = 90000;
 const ruleIds = new Map(); // host -> { set, allow }
+const publishedHeaders = new Map();
 
 function rulesFor(host) {
   let ids = ruleIds.get(host);
@@ -1103,6 +1174,8 @@ function rulesFor(host) {
 
 async function publishSessionHeader(host, jwt) {
   if (!chrome.declarativeNetRequest || !jwt) return;
+  await headerRulesReady;
+  if (publishedHeaders.get(host) === jwt) return;
   const { set, allow } = rulesFor(host);
   const rules = [
     {
@@ -1123,6 +1196,7 @@ async function publishSessionHeader(host, jwt) {
   ];
   try {
     await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [set, allow], addRules: rules });
+    publishedHeaders.set(host, jwt);
     note('header-rule', `Authorization attached to ${host}/api/*`);
   } catch (err) {
     note('header-rule', `FAILED for ${host}: ${(err && err.message) || err}`);
@@ -1158,7 +1232,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === KEEP_ALIVE_ALARM) keepSessionsFresh().catch((err) => log('keep-alive failed', err));
 });
 
-resetHeaderRules();
+const headerRulesReady = resetHeaderRules();
 watchNavigations();
 watchCookies();
 watchOutgoingRequests();

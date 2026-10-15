@@ -31,6 +31,18 @@
         "https://*.comm100staging.com/*",
         "http://localhost/*"
       ],
+      "js": ["src/content/request-hook.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://*.comm100dev.io/*",
+        "https://*.comm100.io/*",
+        "https://*.comm100staging.com/*",
+        "http://localhost/*"
+      ],
       "js": [
         "src/content/content.js"
       ],

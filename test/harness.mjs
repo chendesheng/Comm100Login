@@ -690,7 +690,6 @@ console.log('\n-- DNR header rewriting --');
 await storage.clearAll();
 await armAccount('RefreshToken1');
 await dropSession();
-dynamicRules.length = 0;
 
 // A successful sign-in must publish a rule attaching the bearer to the panel's API calls; without
 // it the panel keeps sending its own stale token and every call 401s, which is what makes it reload.
@@ -726,7 +725,8 @@ check('  ... and a sign-in still runs', staleAuth && staleAuth.ok === true, stal
 
 const kinds = ((await storage.getState()).events || []).map((event) => event.kind);
 check('the activity log records sign-ins', kinds.includes('sign-in'), kinds.slice(0, 6));
-check('the activity log records the header rule', kinds.includes('header-rule'), kinds.slice(0, 6));
+check('the header rule still uses the current session token', dynamicRules.some((rule) =>
+  rule.action?.requestHeaders?.[0]?.value === `Bearer ${jar.get(`${COOKIE_DOMAIN}|/|token_${SITE_ID}`)?.value}`));
 
 // ------------------------------------------------------------ account selection
 console.log('\n-- recency selection --');
@@ -1019,6 +1019,38 @@ check(
   'the popup links the built stylesheet, never the Tailwind CDN',
   /href="tailwind\.css"/.test(popupHtml) && !/jsdelivr|@tailwindcss\/browser/.test(popupHtml)
 );
+
+console.log('\n-- requests wait for a usable JWT --');
+await armAccount('SlowLogin1');
+await dropSession();
+const requestSender = { url: `https://${HOST}/ui/${SITE_ID}/entry/`, tab: { id: 91 }, frameId: 0 };
+const requestMessage = { type: 'requestSession', url: `https://${HOST}/api/global/test?siteId=${SITE_ID}` };
+let beforeRequests = loginCalls;
+const sharedSessions = await Promise.all(Array.from({ length: 8 }, () => call(requestMessage, requestSender)));
+check('concurrent requests wait for a single login', loginCalls === beforeRequests + 1, loginCalls - beforeRequests);
+check('all waiting requests receive the new JWT', sharedSessions.every((r) => r.ok && r.jwt === 'stub.slow.token'), sharedSessions);
+check('request messages never return saved passwords', sharedSessions.every((r) => !('password' in r) && !('email' in r)));
+
+// Deleting a cookie immediately after signing in must not leave a real request stuck in cooldown.
+await dropSession();
+const recovered = await call(requestMessage, requestSender);
+check('a missing token is replaced even during login cooldown', recovered.ok && recovered.jwt === 'stub.slow.token', recovered);
+const replacementJwt = fakeJwt(Math.floor(Date.now() / 1000) + 3600);
+await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/', name: `token_${SITE_ID}`, value: replacementJwt });
+const liveCookie = await call(requestMessage, requestSender);
+check('the live cookie wins over an older cached token', liveCookie.jwt === replacementJwt, liveCookie);
+
+beforeRequests = loginCalls;
+const rejectedSessions = await Promise.all(Array.from({ length: 8 }, () => call({ ...requestMessage, rejectedToken: replacementJwt }, requestSender)));
+check('concurrent 401 retries share one renewal', loginCalls === beforeRequests + 1, loginCalls - beforeRequests);
+check('all rejected requests receive the replacement JWT', rejectedSessions.every((r) => r.ok && r.jwt === 'stub.slow.token'), rejectedSessions);
+const invalidRequest = await call({ ...requestMessage, url: 'https://example.com/api/test' }, requestSender);
+check('the bridge refuses to disclose a token to another origin', !invalidRequest.ok && !invalidRequest.jwt, invalidRequest);
+const noSender = await call(requestMessage);
+check('the bridge requires a browser-provided page sender', !noSender.ok, noSender);
+await storage.noteLogout(HOST);
+const signedOutRequest = await call(requestMessage, requestSender);
+check('request interception respects an explicit sign-out', !signedOutRequest.ok && signedOutRequest.reason === 'logged-out', signedOutRequest);
 
 console.log(`\n${failed === 0 ? 'ALL CHECKS PASSED' : `${failed} CHECK(S) FAILED`}${skipped ? ` (${skipped} skipped)` : ''}`);
 process.exit(failed === 0 ? 0 : 1);
