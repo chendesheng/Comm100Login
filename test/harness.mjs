@@ -469,17 +469,40 @@ await armAccount('DefinitelyWrong1');
 const bad1 = await call({ type: 'ensureAuth', hostname: HOST, force: true });
 check('attempt 1 rejected as bad-credentials', bad1 && bad1.ok === false && bad1.reason === 'bad-credentials', bad1 && bad1.reason);
 check('attempt 1 does not echo the password back', bad1 && bad1.password === undefined);
-check('attempt 1 does not pause yet', bad1 && bad1.paused !== true);
+check('attempt 1 does not create a pause flag', bad1 && !('paused' in bad1));
+
+const immediateRetry = await call({ type: 'ensureAuth', hostname: HOST, force: true });
+check('failed sign-in requests still respect the temporary cooldown', immediateRetry && immediateRetry.reason === 'cooldown', immediateRetry);
+await storage.setSettings({ cooldownMs: 0 });
 
 const bad2 = await call({ type: 'ensureAuth', hostname: HOST, force: true });
 check('attempt 2 rejected', bad2 && bad2.reason === 'bad-credentials', bad2 && bad2.reason);
-check('paused at the default threshold (2)', bad2 && bad2.paused === true, bad2);
+check('two failures do not disable auto-login', bad2 && bad2.failures === 2 && !('paused' in bad2), bad2);
+
+const thirdAttempt = await call({ type: 'ensureAuth', hostname: HOST });
+check('auto-login tries again once the cooldown expires', thirdAttempt && thirdAttempt.reason === 'bad-credentials' && thirdAttempt.failures === 3, thirdAttempt);
+await storage.setSettings({ cooldownMs: 60000 });
 
 const blocked = await call({ type: 'ensureAuth', hostname: HOST });
-check('paused host is skipped instead of retried', blocked && blocked.reason === 'paused', blocked && blocked.reason);
+check('repeated failures use a cooldown rather than a permanent pause', blocked && blocked.reason === 'cooldown', blocked && blocked.reason);
 
 await call({ type: 'resetFailures', hostname: HOST });
-check('resetFailures clears the pause', (await storage.getState()).hostState[HOST].paused === false);
+check('resetFailures clears retry history', (await storage.getState()).hostState[HOST].consecutiveFailures === 0);
+
+console.log('\n-- legacy pause flags cannot hold auto-login back --');
+await armAccount('RefreshToken1');
+await dropSession();
+const legacyPaused = await storage.getState();
+legacyPaused.settings.maxConsecutiveFailures = 2;
+legacyPaused.hostState[HOST] = { paused: true, consecutiveFailures: 2, lastAttemptAt: Date.now() - 120000 };
+await chrome.storage.local.set({ comm100AutoLogin: legacyPaused });
+const migrated = await storage.getState();
+check('stored pause flags and thresholds are ignored on read', !('paused' in migrated.hostState[HOST]) && !('maxConsecutiveFailures' in migrated.settings));
+const legacyPeek = await call({ type: 'canAutoLogin', hostname: HOST, siteId: SITE_ID });
+check('a legacy paused host is eligible again without a popup action', legacyPeek && legacyPeek.eligible === true, legacyPeek);
+const legacyRetry = await call({ type: 'ensureAuth', hostname: HOST, siteId: SITE_ID });
+check('a legacy paused host signs in automatically', legacyRetry && legacyRetry.ok === true, legacyRetry);
+check('an ordinary write removes the legacy flag from disk', !('paused' in (await chrome.storage.local.get('comm100AutoLogin')).comm100AutoLogin.hostState[HOST]));
 
 // ------------------------------------------------------------ mfa (stubbed)
 console.log('\n-- two-factor handoff (stubbed response) --');
@@ -531,10 +554,11 @@ const signedIn = await call({ type: 'canAutoLogin', hostname: HOST, siteId: SITE
 check('not eligible once signed in', signedIn && signedIn.eligible === false && signedIn.reason === 'signed-in', signedIn);
 
 await storage.clearFailures(HOST);
+await dropSession();
 await storage.markFailure(HOST);
 await storage.markFailure(HOST);
-const pausedPeek = await call({ type: 'canAutoLogin', hostname: HOST, siteId: SITE_ID });
-check('not eligible while paused', pausedPeek && pausedPeek.eligible === false && pausedPeek.reason === 'paused', pausedPeek);
+const failedPeek = await call({ type: 'canAutoLogin', hostname: HOST, siteId: SITE_ID });
+check('past failures do not require manual re-enabling', failedPeek && failedPeek.eligible === true, failedPeek);
 
 await storage.clearFailures(HOST);
 await storage.noteLogout(HOST);
@@ -1013,7 +1037,7 @@ check(
 );
 check('the popup edits an account in its own row', /buildAccountEditor/.test(popupJs) && htmlIds.has('accounts'));
 check('there is one popup-level status line', htmlIds.has('status'));
-check('the paused notice is a strip the script can hide', htmlIds.has('pause-notice') && htmlIds.has('reenable'));
+check('the sign-out notice remains available', htmlIds.has('pause-notice') && htmlIds.has('reenable'));
 // The Tailwind browser build is a remote script, and an MV3 extension page may only run scripts from
 // its own package — linking the CDN would leave the popup unstyled in the real extension.
 check(

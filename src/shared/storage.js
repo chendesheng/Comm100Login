@@ -19,12 +19,6 @@ const KEY = 'comm100AutoLogin';
 export const STORAGE_DEFAULTS = Object.freeze({
   /** Minimum gap between automatic attempts for the same host. */
   cooldownMs: 60000,
-  /**
-   * Auto-login pauses for a host after this many consecutive credential failures.
-   * Comm100 locks an account once failed logins exceed the site's password policy, and the
-   * lock only clears after ~30 minutes, so this is deliberately low.
-   */
-  maxConsecutiveFailures: 2,
   /** After an explicit "Log out now" we stay out of the way for this long. */
   logoutSuppressionMs: 300000,
   /** How long a getByEmail result may be reused. */
@@ -99,14 +93,23 @@ function withSite(account, routes) {
 export function normalizeState(raw) {
   const state = raw && typeof raw === 'object' ? raw : {};
   const routes = state.routes && typeof state.routes === 'object' ? state.routes : {};
+  const settings = { ...STORAGE_DEFAULTS, ...(state.settings || {}) };
+  delete settings.maxConsecutiveFailures;
+  // Older versions persisted a permanent pause after two failures. Ignore it immediately,
+  // including on import; the next ordinary write also removes it from Chrome's storage.
+  const hostState = Object.fromEntries(Object.entries(state.hostState || {}).map(([host, value]) => {
+    const entry = { ...value };
+    delete entry.paused;
+    return [host, entry];
+  }));
   return {
     version: 1,
-    settings: { ...STORAGE_DEFAULTS, ...(state.settings || {}) },
+    settings,
     accounts: (Array.isArray(state.accounts) ? state.accounts : [])
       .map(withDomain)
       .map((account) => withSite(account, routes)),
     routes,
-    hostState: state.hostState && typeof state.hostState === 'object' ? state.hostState : {},
+    hostState,
     events: Array.isArray(state.events) ? state.events : []
   };
 }
@@ -361,7 +364,6 @@ export const markSuccess = ({ accountId, host, site, domain }) =>
   mutate((state) => {
     const hs = (state.hostState[host] ||= {});
     hs.consecutiveFailures = 0;
-    hs.paused = false;
     hs.lastSuccessAt = Date.now();
 
     const account = state.accounts.find((a) => a.id === accountId);
@@ -420,8 +422,7 @@ export const markFailure = (host) =>
   mutate((state) => {
     const hs = (state.hostState[host] ||= {});
     hs.consecutiveFailures = (hs.consecutiveFailures || 0) + 1;
-    if (hs.consecutiveFailures >= state.settings.maxConsecutiveFailures) hs.paused = true;
-    return { failures: hs.consecutiveFailures, paused: Boolean(hs.paused) };
+    return { failures: hs.consecutiveFailures };
   });
 
 /**
@@ -448,13 +449,12 @@ export const noteAttempt = (host) =>
     (state.hostState[host] ||= {}).lastAttemptAt = Date.now();
   });
 
-/** Clears the failure pause *and* the post-logout suppression, i.e. "start signing in again". */
+/** Clears retry history and the deliberate post-logout suppression. */
 export const clearFailures = (host) =>
   mutate((state) => {
     state.hostState[host] = {
       ...(state.hostState[host] || {}),
       consecutiveFailures: 0,
-      paused: false,
       lastAttemptAt: 0
     };
     delete state.hostState[host].justLoggedOutAt;

@@ -47,11 +47,11 @@ import {
 /**
  * Outcomes that mean "there was nothing to do", which must not be logged on every poll.
  *
- * They are still *decisions* the popup can explain (the refusal banner, the paused banner), just not
+ * They are still *decisions* the popup can explain (the refusal banner, the sign-out banner), just not
  * history: a sign-in page left open would otherwise append one line a second and evict everything
  * worth reading from a log capped at 40 entries.
  */
-const QUIET_OUTCOMES = new Set(['cooldown', 'paused', 'logged-out', 'no-account']);
+const QUIET_OUTCOMES = new Set(['cooldown', 'logged-out', 'no-account']);
 
 /** host + site -> in-flight promise, so concurrent tabs share one login attempt. */
 const inFlight = new Map();
@@ -178,7 +178,6 @@ async function requestSession(message, sender) {
   guardedFrames.add(frameKey({ tabId: sender.tab.id, frameId: sender.frameId }));
   const state = await store.getState();
   if (store.isSuppressed(state, page.host)) return { ok: false, reason: 'logged-out' };
-  if (state.hostState[page.host]?.paused) return { ok: false, reason: 'paused' };
   const options = {
     domain: page.host, url: page.href, tabId: sender.tab.id,
     siteId: siteIdFromUrl(page.href) || store.normalizeSiteId(target.searchParams.get('siteId')),
@@ -238,20 +237,18 @@ function resolveDomain(domain, url, host) {
  * Guarantees a valid session for `host`.
  *
  * There is no on/off setting: signing in is what the extension is for, and turning *it* off is what
- * disabling the extension is for. `paused` (a rejected password) and the post-sign-out suppression
- * are the two states that hold a sign-in back, and both are recoverable from the popup.
+ * disabling the extension is for. Failed attempts use a temporary retry cooldown; only a deliberate
+ * sign-out suppresses automatic sign-in, and the popup can clear that suppression.
  *
  * `targetHost` is the credential scope, not just a hostname: it is what the account is matched on,
  * what the route cache and failure counters are keyed by, and what the header rule is scoped to.
  *
  * Two independent overrides, because "the user asked" and "a request was rejected" are not the same
  * thing:
- *   - `force`         — the caller has a reason to move now, so the retry cooldown does not apply.
- *                       Set by the 401 middleware and by the popup.
- *   - `userInitiated` — a human clicked something, so a previous credential failure (paused) or a
- *                       just-performed sign-out is theirs to override. Only the popup sets it.
- * Neither may skip the *pause* on its own: retrying a rejected password cannot fix it and spends
- * attempts against the account lockout.
+ *   - `force`         — bypass the ordinary cooldown unless the previous attempt failed.
+ *                       Set by the request hook, 401 middleware and popup.
+ *   - `userInitiated` — a human clicked something and may override the retry cooldown or a
+ *                       just-performed sign-out. Only the popup sets it.
  */
 async function ensureAuth({
   host,
@@ -345,7 +342,7 @@ function siteIdFromUrl(url) {
  */
 async function alreadySignedIn(state, account, site, host) {
   const hs = state.hostState[host] || {};
-  if (hs.consecutiveFailures || hs.paused) await store.clearFailures(host);
+  if (hs.consecutiveFailures) await store.clearFailures(host);
   if (account.pendingPassword) {
     await store.markSuccess({ accountId: account.id, host, domain: host, site });
   }
@@ -562,16 +559,13 @@ async function runEnsureAuth({
   }
 
   const hs = state.hostState[targetHost] || {};
-  // A rejected password is not something a retry can fix, and every retry spends an attempt against
-  // the account lockout — so only a human may override a pause or a deliberate sign-out.
+  // Respect deliberate sign-out. Failed credentials never permanently disable auto-login.
   if (!userInitiated) {
-    if (hs.paused) return { ok: false, reason: 'paused', failures: hs.consecutiveFailures || 0, email: account.email };
     if (store.isSuppressed(state, targetHost)) return { ok: false, reason: 'logged-out', email: account.email };
   }
-  // The cooldown exists to stop background retries hammering the API. A navigation or an API call
-  // the user actually triggered is not a background retry, so callers acting on one pass `force` —
-  // otherwise the watchdog's own replant would lock out the very request that came to rescue it.
-  if (!force && !userInitiated && !ignoreCooldown && store.isCoolingDown(state, targetHost)) {
+  // Requests can bypass the ordinary renewal cooldown, but an actual failed attempt still gets
+  // the temporary backoff. It expires automatically and leaves the login form available.
+  if ((!force || hs.consecutiveFailures > 0) && !userInitiated && !ignoreCooldown && store.isCoolingDown(state, targetHost)) {
     return { ok: false, reason: 'cooldown', email: account.email };
   }
 
@@ -610,7 +604,7 @@ async function runEnsureAuth({
 
   if (!login.jwtToken || (login.errorCode && login.errorCode !== 0)) {
     const failure = await store.markFailure(targetHost);
-    await setBadge(failure.paused ? '!' : null);
+    await setBadge(null);
     return {
       ok: false,
       reason: login.errorCode === 101 ? 'bad-credentials' : 'api-error',
@@ -619,7 +613,6 @@ async function runEnsureAuth({
       // No password: it was just rejected, so pre-filling it would only repeat the failure.
       errorCode: login.errorCode,
       failures: failure.failures,
-      paused: failure.paused,
       message: login.errorMessage || 'Sign-in failed.'
     };
   }
@@ -636,7 +629,7 @@ async function runEnsureAuth({
 
   if (!planted.ok) {
     const failure = await store.markFailure(targetHost);
-    await setBadge(failure.paused ? '!' : null);
+    await setBadge(null);
     return {
       ok: false,
       reason: 'cookie-not-planted',
@@ -824,8 +817,6 @@ async function canAutoLogin({ host, hostname, domain = null, siteId = null, url 
   const account = store.pickAccount(state, targetHost, urlSiteId);
   if (!account) return { eligible: false, reason: 'no-account' };
 
-  const hs = state.hostState[targetHost] || {};
-  if (hs.paused) return { eligible: false, reason: 'paused' };
   if (store.isSuppressed(state, targetHost)) return { eligible: false, reason: 'logged-out' };
 
   const known = knownSiteFor(account, targetHost) || store.getCachedRoute(state, targetHost, account.email);
@@ -869,7 +860,6 @@ async function keepSessionsFresh() {
   for (const host of Object.keys(state.routes || {})) {
     if (!isSupportedHost(host) || !routeOriginFor(host)) continue;
     if (store.isSuppressed(state, host)) continue;
-    if ((state.hostState[host] || {}).paused) continue;
 
     const site = Object.values(state.routes[host] || {}).find((route) => route && route.siteId);
     if (!site) continue;
@@ -929,7 +919,6 @@ async function replantRemovedToken(cookie) {
     if (registrableDomain(host) !== domain) continue;
     if (!routeMatchesSite(state.routes[host], siteId)) continue;
     if (store.isSuppressed(state, host)) continue;
-    if ((state.hostState[host] || {}).paused) continue;
     // Only re-plant for a dashboard that actually holds a credential; otherwise the cookie for
     // site 10010 reappears on every branch that happens to share the cookie domain.
     if (!store.pickAccount(state, host, siteId)) continue;
@@ -1075,7 +1064,6 @@ async function handleAuthFailure(host, url, { siteId = null } = {}) {
   const state = await store.getState();
   if (store.isSuppressed(state, host)) return;
   const hs = state.hostState[host] || {};
-  if (hs.paused) return;
 
   // A site this credential does not own will not start working because a 401 asked again. The
   // refusal is already on record; repeating it would only re-ask the route service every 2 s.

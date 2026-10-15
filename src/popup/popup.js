@@ -195,16 +195,12 @@ async function render() {
     }
   }
 
-  // Paused banner (covers both a credential-failure pause and the post sign-out cooldown). The whole
-  // strip is hidden the rest of the time, so a held-back host is the only thing that shows it.
+  // Only a deliberate sign-out needs manual re-enabling; failed logins retry automatically.
   const hostState = state.hostState[context.host] || {};
-  const paused = Boolean(hostState.paused);
   const suppressed = context.supported && store.isSuppressed(state, context.host);
-  el('pause-notice').hidden = !((paused || suppressed) && context.supported);
+  el('pause-notice').hidden = !suppressed;
   const reenable = el('reenable');
-  if (paused) {
-    reenable.textContent = `Re-enable auto-login (paused after ${hostState.consecutiveFailures || 0} failed attempts)`;
-  } else if (suppressed) {
+  if (suppressed) {
     reenable.textContent = 'Re-enable auto-login (paused after sign-out)';
   }
 

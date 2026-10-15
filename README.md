@@ -87,7 +87,7 @@ If the server returns HTTP 401 despite a locally valid token, the hook renews it
 before delivering the response to the app. It preserves the method, body and other request headers;
 403 responses are passed through. Login endpoints, other origins and synchronous XHR are excluded.
 Without a usable saved credential, the original request proceeds so the app can handle sign-in.
-Explicit sign-out suppression, rejected-password pauses and renewal limits still apply.
+Explicit sign-out suppression, temporary retry cooldowns and renewal limits still apply.
 
 The content script relays these requests to the worker; passwords are never sent to the page hook.
 Background cookie monitoring and header rules remain as backstops, but cannot themselves pause a
@@ -221,8 +221,8 @@ Three things keep the form off the screen:
    `#login` behind a short "Signing in…" notice — removed the instant the attempt resolves, so a
    refusal reveals the form and a success navigates away.
 
-The pre-flight deliberately mirrors *every* gate the real attempt applies (no account, paused after
-failures, suppressed after sign-out, still cooling down, site unresolvable). If it disagrees with
+The pre-flight deliberately mirrors *every* gate the real attempt applies (no account, suppressed
+after sign-out, still cooling down, site unresolvable). If it disagrees with
 the attempt, the form would be hidden for nothing — a worse flicker than the one being prevented.
 
 ### Acting as middleware on a rejected request
@@ -329,7 +329,7 @@ removed, because it was the one change capable of making Chrome or the server re
 ### Activity log
 
 The worker keeps a rolling log of what it decided and why — `cookie-removed`, `sign-in ->
-ok`/`-> paused`, `header-rule -> Authorization attached to …`, `401`, and `redirect: login page -> …`
+ok`/`-> bad-credentials`/`-> api-error`, `header-rule -> Authorization attached to …`, `401`, and `redirect: login page -> …`
 when the content script leaves `/login`.
 
 It exists because "it still reloads" was being diagnosed by guesswork across several rounds. That log
@@ -414,9 +414,10 @@ regardless; a simplified small variant would be a change to the artwork, not to 
 ## Use
 
 There is no "sign in automatically" switch. Signing in *is* the extension, so the off switch is
-disabling the extension in `chrome://extensions`. The two things that can legitimately hold a sign-in
-back — the pause after a rejected password, and the 5-minute suppression after a sign-out — surface as
-a banner above the account list with a **Re-enable auto-login** button, and nothing else gates it.
+disabling the extension in `chrome://extensions`. A deliberate sign-out suppresses sign-in for
+5 minutes and shows a **Re-enable auto-login** button. Failed sign-ins leave the login form available
+and retry automatically after the cooldown; they never require manual re-enabling. Permanent pause
+flags saved by older versions are ignored and removed by the next normal storage write.
 
 - **Login now** (per account) — signs in with that credential and opens
   `https://{dashboard}/ui/{siteId}/entry/?fromlogin=1` — the panel's own post-sign-in path, which then
@@ -473,15 +474,13 @@ the lock clears after **30 minutes** or when a site administrator unlocks it. Th
 
 Because of that the extension is deliberately conservative:
 
-- only **2** consecutive failures before auto-login pauses for that host (badge turns red, popup
-  offers *Re-enable*);
-- a **60 s** minimum gap between attempts;
+- a **60 s** cooldown after a failed attempt, including attempts triggered by outgoing requests;
 - **form capture does not verify** — the user has just spent one sign-in attempt, and duplicating
   every attempt would halve the budget;
 - `errorCode 114` is reported as-is rather than retried.
 
-Automatic sign-in is paused after logout, during the cooldown, and after the failure threshold —
-it only resumes on an explicit popup action.
+There is no failure threshold that disables auto-login. The cooldown expires automatically. An
+explicit popup action can retry sooner; deliberate sign-out suppression remains independent.
 
 ## Testing
 
@@ -508,10 +507,8 @@ the file.
 
 ## Behaviour details
 
-- Auto-login is skipped for 60 s after a failed attempt per host, and **pauses entirely after 2
-  consecutive failures** (badge turns red, popup shows a *Re-enable* button). Only a click in the
-  popup overrides a pause — never a rejected request, because retrying a bad password cannot fix it
-  and each retry spends an attempt against the lockout.
+- Auto-login backs off for 60 s after a failed attempt per host, then becomes eligible automatically.
+  There is no permanent pause after repeated failures. An explicit popup action may retry sooner.
 - A dashboard with no saved account, or an account that has none for the site the URL names, is
   reported as such — the popup says which dashboard and site it *does* have, and the sign-in page is
   left alone for you. Suspicious silences are shown in the popup, not just logged.
