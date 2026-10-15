@@ -28,6 +28,7 @@ import {
   clearSessionCookies,
   ensureSessionCookies,
   findSession,
+  getAllCookies,
   getCookie,
   hasSession,
   isJwtFresh,
@@ -35,6 +36,13 @@ import {
   tokenCookieName
 } from '../shared/cookies.js';
 import * as store from '../shared/storage.js';
+import {
+  COOKIE_HEADER_BUDGET_BYTES,
+  cookieHeaderBytes,
+  isSessionPruned,
+  restoreSessionTracking,
+  trimSessionCookies
+} from '../shared/cookie-budget.js';
 
 /**
  * Outcomes that mean "there was nothing to do", which must not be logged on every poll.
@@ -301,6 +309,7 @@ async function ensureAuth({
         note('sign-in', `${targetHost} -> ${result && result.ok ? 'ok' : (result && result.reason) || 'failed'}`);
       }
       if (result && result.ok && result.siteId) {
+        await restoreSessionTracking(targetHost, result.siteId);
         const jwt = await tokenFor(targetHost, result.siteId);
         if (jwt) await publishSessionHeader(targetHost, jwt);
       }
@@ -864,6 +873,7 @@ async function keepSessionsFresh() {
 
     const site = Object.values(state.routes[host] || {}).find((route) => route && route.siteId);
     if (!site) continue;
+    if (await isSessionPruned(host, site.siteId)) continue;
 
     const account = store.pickAccount(state, host, site.siteId);
     if (!account) continue;
@@ -909,9 +919,9 @@ const recentLoginNav = new Map();
  * signed-in browser and never routes to /login in the first place.
  */
 async function replantRemovedToken(cookie) {
-  const state = await store.getState();
-
   const siteId = cookie.name.slice('token_'.length);
+  if (await isSessionPruned(cookie.domain, siteId)) return;
+  const state = await store.getState();
   const domain = String(cookie.domain || '').replace(/^\./, '');
   const now = Date.now();
 
@@ -1110,6 +1120,65 @@ async function handleAuthFailure(host, url, { siteId = null } = {}) {
 
 // ---------------------------------------------------------------- early start
 
+// Static files fail before the application's fetch/XHR hooks can help. MV3 observers cannot
+// replay a script or stylesheet into its original loader, so repair cookies and reload the tab.
+// Persist the retry guard: a worker restart or a page full of failing assets must not loop.
+const STATIC_RECOVERY_KEY = 'comm100StaticRecovery';
+const STATIC_RECOVERY_WINDOW_MS = 60000;
+let staticRecoveryQueue = Promise.resolve();
+
+function watchStaticResponses() {
+  if (!chrome.webRequest?.onCompleted) return;
+  chrome.webRequest.onCompleted.addListener((details) => {
+    if (details.tabId < 0 || details.frameId !== 0 || details.method !== 'GET' ||
+        ![400, 431].includes(details.statusCode)) return;
+    const htmlError = (details.responseHeaders || []).some((h) =>
+      h.name.toLowerCase() === 'content-type' && /text\/html/i.test(h.value || ''));
+    if (details.statusCode === 400 && !htmlError) return;
+    staticRecoveryQueue = staticRecoveryQueue.then(() => recoverStaticRequest(details))
+      .catch((err) => log('static-file cookie recovery failed', err));
+  }, {
+    urls: WATCHED_URLS,
+    types: ['main_frame', 'script', 'stylesheet', 'image', 'font', 'media']
+  }, ['responseHeaders']);
+}
+
+async function recoverStaticRequest(details) {
+  const target = new URL(details.url);
+  if (!isSupportedHost(target.host)) return;
+  const tab = await chrome.tabs.get(details.tabId);
+  const page = new URL(tab.url);
+  if (details.type === 'main_frame' && page.href !== target.href) return;
+  // The failed response may belong to a page the user has already left.
+  if (registrableDomain(page.hostname) !== registrableDomain(target.hostname)) return;
+  const saved = await chrome.storage.local.get(STATIC_RECOVERY_KEY);
+  const recoveries = saved[STATIC_RECOVERY_KEY] || {};
+  const key = `${details.tabId}|${page.host}`;
+  if (Date.now() - (recoveries[key] || 0) < STATIC_RECOVERY_WINDOW_MS) return;
+  const before = cookieHeaderBytes(await getAllCookies(target.href));
+  // webRequest does not expose the response body. For a generic 400, require both an HTML
+  // error response and cookie pressure. Never reload on ordinary small-cookie API errors.
+  if (details.statusCode === 400 && before <= COOKIE_HEADER_BUDGET_BYTES) return;
+  const state = await store.getState();
+  const siteId = siteIdFromUrl(details.type === 'main_frame' ? target.href : page.href);
+  const account = store.pickAccount(state, page.host, siteId);
+  const keepSiteId = siteId || knownSiteFor(account, page.host)?.siteId;
+  const result = await trimSessionCookies(target.href, keepSiteId, { force: details.statusCode === 431 });
+  if (result.afterBytes >= result.beforeBytes) {
+    note('cookie-budget', `${target.host}: ${result.beforeBytes} bytes; cannot reduce without removing the current session or unrelated cookies`);
+    return;
+  }
+  // Discard expired retry records so this map remains bounded as tabs are opened and closed.
+  const now = Date.now();
+  const recent = Object.fromEntries(Object.entries(recoveries).filter(([, at]) => now - at < STATIC_RECOVERY_WINDOW_MS));
+  recent[key] = now;
+  await chrome.storage.local.set({ [STATIC_RECOVERY_KEY]: recent });
+  note('cookie-budget', `${target.host}: ${result.beforeBytes} -> ${result.afterBytes} bytes; removed sites ${result.removedSiteIds.join(', ')}; retrying page once`);
+  // Check again after async cookie work; never reload a different page opened in this tab.
+  const current = await chrome.tabs.get(details.tabId);
+  if (current.url === tab.url) await chrome.tabs.reload(details.tabId);
+}
+
 /**
  * Begin signing in as soon as the navigation is known, rather than waiting for the document.
  * Comm100's control panel is a SPA that only checks for its cookie after loading a large bundle,
@@ -1237,4 +1306,5 @@ watchNavigations();
 watchCookies();
 watchOutgoingRequests();
 watchApiResponses();
+watchStaticResponses();
 scheduleKeepAlive();

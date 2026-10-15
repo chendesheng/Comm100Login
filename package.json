@@ -4,7 +4,7 @@
   "private": true,
   "description": "Chrome extension that signs in to Comm100 test dashboards. This file exists only for the Tailwind build step; the extension itself has no runtime dependencies.",
   "scripts": {
-    "test": "node test/harness.mjs && node test/request-hook.mjs",
+    "test": "node test/harness.mjs && node test/request-hook.mjs && node test/cookie-budget.mjs",
     "build:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --minify",
     "watch:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --watch"
   },

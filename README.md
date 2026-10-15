@@ -46,6 +46,25 @@ and refresh existing dashboard tabs so they load the request hook.
 Run `npm test` for the offline background and request-hook checks. These checks stub Chrome and
 network boundaries; live dashboard behavior still needs verification after reloading the extension.
 
+### Static files rejected because the Cookie header is too large
+
+HTML pages, scripts, stylesheets, images, fonts and media load outside the app's API hooks. The
+worker watches their GET responses. An HTML 400 response with a Cookie header over a conservative
+4 KiB budget, or HTTP 431, triggers cleanup: expired JWT sessions first, then the oldest JWTs, along
+with their `tokenExpire_*` cookies. The current page's site is kept; without a known site, the newest
+token is kept. Saved accounts and unrelated cookies are preserved.
+
+After successful cleanup, the extension reloads the affected tab so Chrome fetches the static files
+again. A persistent guard allows at most one automatic reload per tab and dashboard per minute,
+including when several assets fail together or the worker restarts. Watchdog and keep-alive tasks
+do not restore evicted sessions; opening an evicted site can sign it in again normally.
+
+The worker cannot read response bodies, so it uses status, content type and measured cookie size
+instead of matching Nginx's error text. The actual ingress limit is server-specific. If the current
+JWT or unrelated cookies alone exceed that limit, removing older JWTs cannot solve it. Cleanup and
+byte counts appear as `cookie-budget` entries in the popup's activity log. Reloading the page can
+discard unsaved state.
+
 ### Credentials belong to a dashboard
 
 Every Comm100 test branch shares the `comm100dev.io` cookie domain, but they are **separate

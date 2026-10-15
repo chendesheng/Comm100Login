@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 const listeners = [];
 const alarmListeners = [];const navListeners = [];
 const webRequestListeners = [];
+const staticResponseListeners = [];
 const tabReloads = [];
 const beforeSendHeaderListeners = [];
 const beforeRequestListeners = [];
@@ -55,7 +56,7 @@ globalThis.chrome = {
     onBeforeNavigate: { addListener: (fn) => navListeners.push(fn) }
   },
   webRequest: {
-    onCompleted: { addListener: (fn) => webRequestListeners.push(fn) },
+    onCompleted: { addListener: (fn, filter) => (filter.types ? staticResponseListeners : webRequestListeners).push(fn) },
     onBeforeSendHeaders: { addListener: (fn) => beforeSendHeaderListeners.push(fn) },
     onBeforeRequest: { addListener: (fn) => beforeRequestListeners.push(fn) }
   },
@@ -1051,6 +1052,75 @@ check('the bridge requires a browser-provided page sender', !noSender.ok, noSend
 await storage.noteLogout(HOST);
 const signedOutRequest = await call(requestMessage, requestSender);
 check('request interception respects an explicit sign-out', !signedOutRequest.ok && signedOutRequest.reason === 'logged-out', signedOutRequest);
+
+console.log('\n-- static-file cookie overflow recovery --');
+const sleepForCookieChecks = () => new Promise((resolve) => setTimeout(resolve, 150));
+await armAccount('SlowLogin1');
+await dropSession();
+const cookieBudget = await import(`${ROOT}/shared/cookie-budget.js`);
+const largeJwt = (iat) => `h.${Buffer.from(JSON.stringify({ iat, exp: Math.floor(Date.now() / 1000) + 7200, padding: 'x'.repeat(1800) })).toString('base64url')}.s`;
+for (const [siteId, iat] of [[SITE_ID, 1], ['90001', 2], ['90002', 3]]) {
+  await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/', name: `token_${siteId}`, value: largeJwt(iat) });
+  await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/', name: `tokenExpire_${siteId}`, value: 'future' });
+}
+await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/', name: 'unrelated', value: 'keep-me' });
+const oldCookie = await chrome.cookies.get({ url: `https://${HOST}`, name: 'token_90001' });
+const evictedSite = { siteId: '90001', portalUrl: `https://${HOST}` };
+const evictedEmail = 'static-eviction@example.com';
+const evictedAccount = await storage.upsertAccount({ email: evictedEmail, password: 'SlowLogin1', host: HOST, domain: HOST });
+await storage.resolvePending({ accountId: evictedAccount, ok: true });
+await storage.noteSite({ accountId: evictedAccount, site: evictedSite, domain: HOST });
+await storage.putRoute(HOST, evictedEmail, evictedSite);
+const staticFailure = { type: 'script', method: 'GET', statusCode: 400, tabId: 92, frameId: 0,
+  url: `https://${HOST}/assets/app.js`, responseHeaders: [{ name: 'Content-Type', value: 'text/html' }] };
+currentTabUrl = `https://${HOST}/ui/${SITE_ID}/entry/`;
+const reloadCount = tabReloads.length;
+check('a static-response listener is registered', staticResponseListeners.length === 1);
+for (const fn of staticResponseListeners) fn(staticFailure);
+await waitFor(() => tabReloads.length > reloadCount);
+check('static 400 with large cookies reloads the affected page once', tabReloads.length === reloadCount + 1);
+check('the current site token is kept', Boolean(await chrome.cookies.get({ url: `https://${HOST}`, name: `token_${SITE_ID}` })));
+check('older JWTs and companion expiry cookies are removed', !await chrome.cookies.get({ url: `https://${HOST}`, name: 'token_90001' }) && !await chrome.cookies.get({ url: `https://${HOST}`, name: 'tokenExpire_90001' }));
+check('the resulting cookie header fits the budget', cookieBudget.cookieHeaderBytes(await cookies.getAllCookies(`https://${HOST}`)) <= cookieBudget.COOKIE_HEADER_BUDGET_BYTES);
+check('unrelated cookies are kept', (await chrome.cookies.get({ url: `https://${HOST}`, name: 'unrelated' }))?.value === 'keep-me');
+beforeRequests = loginCalls;
+for (const fn of cookieChangeListeners) fn({ removed: true, cookie: oldCookie, cause: 'explicit' });
+await sleepForCookieChecks();
+check('the watchdog does not re-create deliberately evicted JWTs', loginCalls === beforeRequests && !await chrome.cookies.get({ url: `https://${HOST}`, name: 'token_90001' }));
+for (const fn of staticResponseListeners) fn({ ...staticFailure, statusCode: 431 });
+await sleepForCookieChecks();
+check('failing assets cannot create a reload loop', tabReloads.length === reloadCount + 1);
+for (const fn of staticResponseListeners) {
+  fn({ ...staticFailure, tabId: 93 });
+  fn({ ...staticFailure, tabId: 94, statusCode: 431, method: 'POST' });
+  fn({ ...staticFailure, tabId: 95, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }] });
+}
+await sleepForCookieChecks();
+check('small-cookie 400s, POSTs and normal validation responses do not reload', tabReloads.length === reloadCount + 1);
+
+for (const siteId of ['90003', '90004']) {
+  await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/', name: `token_${siteId}`, value: largeJwt(Number(siteId)) });
+}
+for (const fn of staticResponseListeners) fn({ ...staticFailure, type: 'main_frame', tabId: 96, url: currentTabUrl });
+await waitFor(() => tabReloads.length > reloadCount + 1);
+check('the initial HTML page can recover before application JavaScript loads', tabReloads.length === reloadCount + 2);
+for (const fn of staticResponseListeners) fn({ ...staticFailure, statusCode: 431, tabId: 96, url: 'https://assets.comm100dev.io/app.css', type: 'stylesheet' });
+await sleepForCookieChecks();
+check('the retry guard covers different static hosts in the same page', tabReloads.length === reloadCount + 2);
+
+// Make the evicted site the keep-alive's only target, so this checks suppression rather than
+// merely relying on an unrelated current site's still-fresh cookie.
+await storage.clearAll();
+await storage.putRoute(HOST, evictedEmail, evictedSite);
+const dormantAccount = await storage.upsertAccount({ email: evictedEmail, password: 'SlowLogin1', host: HOST, domain: HOST });
+await storage.resolvePending({ accountId: dormantAccount, ok: true });
+await storage.noteSite({ accountId: dormantAccount, site: evictedSite, domain: HOST });
+beforeRequests = loginCalls;
+for (const fn of alarmListeners) fn({ name: 'comm100-keep-alive' });
+await sleepForCookieChecks();
+check('keep-alive leaves evicted sites dormant', loginCalls === beforeRequests);
+const revisit = await call({ type: 'ensureAuth', domain: HOST, siteId: evictedSite.siteId, force: true });
+check('a real visit can sign an evicted site in again', revisit.ok && !await cookieBudget.isSessionPruned(HOST, evictedSite.siteId), revisit);
 
 console.log(`\n${failed === 0 ? 'ALL CHECKS PASSED' : `${failed} CHECK(S) FAILED`}${skipped ? ` (${skipped} skipped)` : ''}`);
 process.exit(failed === 0 ? 0 : 1);
