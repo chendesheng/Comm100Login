@@ -1,14 +1,22 @@
 {
-  "name": "comm100-auto-login",
+  "name": "@chendesheng/comm100-auto-login",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "description": "Comm100 auto-login extension and account CLI. The extension has no runtime dependencies; the CLI uses classic-level.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chendesheng/Comm100Login.git"
+  },
+  "publishConfig": { "access": "public" },
+  "files": ["bin/", "src/cli/", "src/shared/", "extension/", "scripts/postinstall.mjs"],
   "bin": {
     "comm100-accounts": "bin/comm100-accounts.mjs"
   },
   "engines": { "node": ">=22" },
   "scripts": {
+    "build:extension": "node scripts/build-extension.mjs",
+    "prepack": "npm run build:extension",
+    "postinstall": "node scripts/postinstall.mjs",
     "test": "node test/harness.mjs && node test/request-hook.mjs && node test/cookie-budget.mjs && node --test test/*.test.mjs",
     "build:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --minify",
     "watch:css": "tailwindcss -i src/popup/tailwind.input.css -o src/popup/tailwind.css --watch"

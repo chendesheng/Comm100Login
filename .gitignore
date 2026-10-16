@@ -1,6 +1,10 @@
 # Dependencies (CLI and development; the extension has no runtime dependencies)
 node_modules/
 
+# npm extension bundle, generated from the source tree by prepack
+extension/
+*.tgz
+
 # Local npm cache used by the Tailwind build (npm_config_cache=.npm-cache)
 .npm-cache/
 

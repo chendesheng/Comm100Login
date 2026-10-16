@@ -11,6 +11,7 @@ import { compareAccountOrder, effectivePassword, filterAccounts, normalizeDomain
 import { cachedToken, tokenIsFresh } from '../shared/tokens.js';
 import { chromeDataDirectory, requestBridge } from './bridge.mjs';
 import { installBridge } from './setup.mjs';
+import { extensionPath } from './extension-path.mjs';
 export { tokenIsFresh } from '../shared/tokens.js';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -19,12 +20,14 @@ const help = `Usage:
   comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
   comm100-accounts setup [--profile=PATH_OR_NAME]
+  comm100-accounts extension-path
 
 list   Print siteId (12 columns), email (30 columns), and domain, ordered by domain, site id,
        then email, with optional filters.
 login  Print a valid cached JWT, or sign in once and save the new JWT.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
+extension-path Print the installed Chrome extension folder for "Load unpacked".
 
 Options:
   --domain=HOST          Filter by dashboard; login defaults to $NAMESPACE + dash.testing.comm100dev.io
@@ -67,7 +70,8 @@ export async function findDatabase({ db, profile } = {}) {
     for (const [id, settings] of Object.entries(preferences.extensions?.settings || {})) {
       if (!/^[a-p]{32}$/.test(id)) continue;
       if (settings.manifest?.name !== 'Comm100 Auto Login' &&
-          (!settings.path || (resolve(settings.path) !== resolve(projectRoot) && basename(settings.path) !== 'Comm100Login'))) continue;
+          (!settings.path || (resolve(settings.path) !== resolve(projectRoot) &&
+            resolve(settings.path) !== resolve(extensionPath()) && basename(settings.path) !== 'Comm100Login'))) continue;
       const path = join(directory, 'Local Extension Settings', id);
       try { if ((await stat(path)).isDirectory()) found.add(path); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -220,12 +224,17 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   } });
   if (values.help || !positionals.length) { stdout.write(help); return; }
   const [command, email] = positionals;
-  if (!['list', 'login', 'tokens', 'setup'].includes(command) || positionals.length !== (command === 'login' ? 2 : 1)) {
-    throw new Error('Use "list", "login <email>", "tokens", or "setup". See --help.');
+  if (!['list', 'login', 'tokens', 'setup', 'extension-path'].includes(command) || positionals.length !== (command === 'login' ? 2 : 1)) {
+    throw new Error('Use "list", "login <email>", "tokens", "setup", or "extension-path". See --help.');
   }
   if (values['show-password'] && command !== 'list') throw new Error('--show-password is only supported by list.');
   if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
+  if (command === 'extension-path') {
+    if (Object.keys(values).length) throw new Error('extension-path does not accept account or profile options.');
+    stdout.write(extensionPath() + '\n');
+    return;
+  }
   if (command === 'setup') {
     const database = await findDatabase(values);
     await installBridge(database, await readChromeState(database));

@@ -11,6 +11,7 @@ import { defaultDomain, findDatabase, login as cliLogin, readChromeState, run, t
 import * as storage from '../src/shared/storage.js';
 import { normalizeState } from '../src/shared/storage.js';
 import { handleCliRequest } from '../src/background/cli-bridge.js';
+import { extensionPath } from '../src/cli/extension-path.mjs';
 
 const execute = promisify(execFile);
 let currentStore;
@@ -400,4 +401,13 @@ test('executable reports usage and bridge setup errors without exposing account 
     assert.match(error.stderr, /setup/);
     return true;
   });
+});
+
+test('extension-path works without a browser bridge and rejects irrelevant options', async () => {
+  const { stdout } = await execute(process.execPath, [binary, 'extension-path']);
+  assert.equal(stdout.trim(), extensionPath());
+  const forbiddenRequest = () => { throw new Error('This command must not contact Chrome'); };
+  for (const option of ['--domain=example.com', '--profile=/missing', '--cookie']) {
+    await assert.rejects(run(['extension-path', option], { request: forbiddenRequest }), /only supported|does not accept/);
+  }
 });

@@ -8,7 +8,25 @@ one for the site you are on.
 
 ## Terminal account tool
 
-Requires Node.js 22 or later. Install dependencies and link the executable from this checkout:
+Requires Node.js 22 or later. Install the CLI and bundled Chrome extension from npm:
+
+```bash
+npm install --global --foreground-scripts @chendesheng/comm100-auto-login
+```
+
+The install message prints the absolute extension folder inside the installed package:
+`node_modules/@chendesheng/comm100-auto-login/extension`. Open `chrome://extensions`, enable
+**Developer mode**, click **Load unpacked**, and select that folder. You can print its path again:
+
+```bash
+comm100-accounts extension-path
+```
+
+`--foreground-scripts` makes npm show the install message. If install scripts are disabled or their
+output is hidden, the extension files are still included and `extension-path` works normally.
+After updating the npm package, click **Reload** for the extension in Chrome to load the new code.
+
+For development from a source checkout, install dependencies and link the executable instead:
 
 ```bash
 npm install
@@ -100,6 +118,32 @@ numeric `iat`, `nbf`, and `exp` claims. Nested payload data is preserved. Decodi
 signature; `fresh` uses the same local expiry checks as `login`. A malformed JWT is listed with a
 `decodeError` so other entries can still be inspected. Use `--domain` and/or `--siteId` to filter.
 An empty cache prints `[]`. The command only reads from the worker and never signs in or renews tokens.
+
+### Publishing npm releases
+
+`npm pack` and `npm publish` build `extension/` from the current browser source files. The npm
+package includes that ready-to-load extension, CLI runtime modules and the install message.
+Tests, development tools, local account data and `node_modules` are excluded from the archive.
+
+The first release is published with `npm login --auth-type=web` followed by `npm publish`.
+Then configure **Trusted publishing** in the npm package settings with:
+
+- Provider: GitHub Actions
+- Repository owner: `chendesheng`
+- Repository: `Comm100Login`
+- Workflow filename: `publish-npm.yml`
+- Allowed action: publish
+
+The workflow uses GitHub's OIDC identity and requires no npm token secret. Future releases run
+automatically when a version tag is pushed:
+
+```bash
+npm version patch
+git push origin main --follow-tags
+```
+
+The tag must match the package version, such as `v1.0.1`. CI installs dependencies, runs the test
+suite, builds the extension during packing, and publishes the package with public access.
 
 ## How it works
 
