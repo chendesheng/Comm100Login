@@ -159,6 +159,55 @@ test('login saves a JWT privately and reuses it without another network request'
   assert.deepEqual(await readdir(join(f.directory, 'cache')), ['tokens.json']);
 });
 
+test('login --cookie prints curl -b cookies with the server expiry, including from cache', async (t) => {
+  const f = await fixture(t, [account('a@example.com')]);
+  const token = jwt();
+  const expireTime = new Date(Date.now() + 1800000).toISOString();
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return Response.json({ errorCode: 0, jwtToken: token, expireTime });
+  });
+  const args = ['login', 'a@example.com', '--db', f.location, '--token-file', f.tokenFile];
+  const expected = `token_10001=${token}; tokenExpire_10001=${encodeURIComponent(expireTime)}; siteList=10001\n`;
+  const fresh = capture();
+  await run([...args, '--cookie'], fresh);
+  assert.equal(fresh.text(), expected);
+  const cached = capture();
+  await run([...args, '--cookie'], cached);
+  assert.equal(cached.text(), expected);
+  const plain = capture();
+  await run(args, plain);
+  assert.equal(plain.text(), token + '\n');
+  assert.equal(calls, 1);
+});
+
+test('cookie output uses the resolved site and JWT expiry when server expiry is absent', async (t) => {
+  const f = await fixture(t, [account('a@example.com', host, null)]);
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const token = jwt(exp);
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    calls++;
+    if (url.includes('/getByEmail?')) return Response.json({ sites: [{ siteId: 72, portalUrl: `https://${host}` }] });
+    return Response.json({ errorCode: 0, jwtToken: token });
+  });
+  const args = ['login', 'a@example.com', '--db', f.location, '--token-file', f.tokenFile, '--cookie'];
+  const fresh = capture();
+  await run(args, fresh);
+  assert.equal(fresh.text(), `token_72=${token}; tokenExpire_72=${encodeURIComponent(new Date(exp * 1000).toISOString())}; siteList=72\n`);
+  const cached = capture();
+  await run(args, cached);
+  assert.equal(cached.text(), fresh.text());
+  assert.equal(calls, 2);
+});
+
+test('list rejects --cookie before reading accounts', async () => {
+  const output = capture();
+  await assert.rejects(run(['list', '--cookie', '--db', '/missing'], output), /--cookie is only supported by login/);
+  assert.equal(output.text(), '');
+});
+
 test('expired tokens are replaced while other accounts retain their latest JWT', async (t) => {
   const f = await fixture(t, []);
   const a = account('a@example.com');

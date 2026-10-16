@@ -24,6 +24,7 @@ comm100-accounts list --show-password
 comm100-accounts login agent@example.com
 comm100-accounts login agent@example.com --siteId=10010
 comm100-accounts login agent@example.com --domain=livechat6dash.testing.comm100dev.io
+comm100-accounts login agent@example.com --cookie
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -32,6 +33,19 @@ longer values are preserved. Site ids compare as numbers (site 9999 before site 
 or domains appear as `-` and sort last. Domain and site filters are optional. `login` prints only
 the JWT, so it can be captured with `token="$(comm100-accounts login agent@example.com)"`. Errors go
 to stderr with a nonzero exit status.
+
+`login --cookie` prints a single cookie string that can be passed directly to curl's `-b` option:
+
+```bash
+curl -b "$(comm100-accounts login agent@example.com --siteId=10010 --cookie)" \
+  'https://livechat6dash.testing.comm100dev.io/api/global/siteActivity:active'
+```
+
+The output is `token_<siteId>=<jwt>; tokenExpire_<siteId>=<encoded-expiry>; siteList=<siteId>`.
+The two token cookies hold the JWT and its URL-encoded expiry; `siteList` identifies the selected
+site, matching the extension's session cookies. The expiry comes from the login response, or the
+JWT's `exp` claim when no server expiry was supplied. No `Cookie:` prefix or cookie attributes are
+printed. This option reuses the same JWT cache and leaves browser cookies untouched.
 
 `list --show-password` inserts the saved password as the third column, after email, padded to
 20 characters. It uses the same password as `login`: verified password first, otherwise the pending

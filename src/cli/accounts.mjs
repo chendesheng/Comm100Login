@@ -6,13 +6,13 @@ import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ClassicLevel } from 'classic-level';
 import { dashboardOriginFor, getByEmail, jwtLogin, needsSecondFactor, normalizeSite, routeOriginFor } from '../shared/api.js';
-import { jwtExpirySeconds } from '../shared/cookies.js';
+import { expirySecondsFor, jwtExpirySeconds, tokenCookieName, tokenExpireCookieName } from '../shared/cookies.js';
 import { compareAccountOrder, effectivePassword, filterAccounts, normalizeDomain, normalizeState } from '../shared/storage.js';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
-  comm100-accounts login <email> [--domain=HOST] [--siteId=ID]
+  comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
 
 list   Print siteId (12 columns), email (30 columns), and domain, ordered by domain, site id,
        then email, with optional filters.
@@ -22,6 +22,7 @@ Options:
   --domain=HOST          Filter by dashboard; login defaults to $NAMESPACE + dash.testing.comm100dev.io
                         only when multiple site IDs match
   --siteId=ID            Restrict to a site
+  --cookie              Print session cookies for curl -b instead of the JWT (login only)
   --show-password       Include a 20-character password column after email (list only)
   --profile=PATH_OR_NAME  Chrome profile directory (default: Chrome's Default profile)
   --db=PATH              Extension LevelDB directory; overrides profile discovery
@@ -29,7 +30,7 @@ Options:
   --help                 Show this help
 
 Chrome's database is copied to a temporary directory and never opened in place.
-Only account rows or the JWT go to stdout. Errors go to stderr. No browser cookies are changed.
+Only account rows, the JWT, or the cookie string go to stdout. Errors go to stderr. No browser cookies are changed.
 `;
 
 export function defaultDomain(namespace = process.env.NAMESPACE) {
@@ -199,6 +200,13 @@ async function resolveLoginSite(state, account, domain, siteId) {
   return normalizeSite(sites[0]);
 }
 
+function loginOutput(record, options) {
+  if (!options.cookie) return record.jwtToken;
+  const expiresAt = expirySecondsFor(record.jwtToken, record.expireTime);
+  const expireTime = record.expireTime || new Date(expiresAt * 1000).toISOString();
+  return `${tokenCookieName(record.siteId)}=${record.jwtToken}; ${tokenExpireCookieName(record.siteId)}=${encodeURIComponent(expireTime)}; siteList=${record.siteId}`;
+}
+
 export async function login(state, email, options) {
   const selected = selectAccount(state, email, options);
   const account = selected.account;
@@ -213,7 +221,7 @@ export async function login(state, email, options) {
     .sort((a, b) => b.savedAt - a.savedAt)[0];
   if (cached && tokenIsFresh(cached)) {
     await chmod(tokenFile, 0o600);
-    return cached.jwtToken;
+    return loginOutput(cached, options);
   }
   const password = effectivePassword(account);
   if (!password) throw new Error('This account has no saved password. Sign in through the extension first.');
@@ -228,14 +236,14 @@ export async function login(state, email, options) {
     jwtToken: response.jwtToken, expireTime: response.expireTime || null, savedAt: Date.now() };
   if (!tokenIsFresh(record)) throw new Error('The login service returned an expired token or no usable token expiry.');
   await saveToken(tokenFile, record);
-  return response.jwtToken;
+  return loginOutput(record, options);
 }
 
 export async function run(args, { stdout = process.stdout } = {}) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
     profile: { type: 'string' }, 'token-file': { type: 'string' },
-    'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }
+    cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }
   } });
   if (values.help || !positionals.length) { stdout.write(help); return; }
   const [command, email] = positionals;
@@ -243,6 +251,7 @@ export async function run(args, { stdout = process.stdout } = {}) {
     throw new Error('Use "list" or "login <email>". See --help.');
   }
   if (values['show-password'] && command !== 'list') throw new Error('--show-password is only supported by list.');
+  if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
   const state = await readChromeState(await findDatabase(values));
   if (command === 'list') {
