@@ -153,6 +153,9 @@ After successful cleanup, the extension reloads the affected tab so Chrome fetch
 again. A persistent guard allows at most one automatic reload per tab and dashboard per minute,
 including when several assets fail together or the worker restarts. Watchdog and keep-alive tasks
 do not restore evicted sessions; opening an evicted site can sign it in again normally.
+SPA route and fragment changes within the same document do not prevent recovery. Navigating to
+another document skips the reload without consuming the retry, and a rejected reload releases its
+retry guard. The activity log distinguishes reload requests, skipped reloads and reload failures.
 
 The worker cannot read response bodies, so it uses status, content type and measured cookie size
 instead of matching Nginx's error text. The actual ingress limit is server-specific. If the current

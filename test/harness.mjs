@@ -30,6 +30,8 @@ const cookieChangeListeners = [];
 const tabUpdates = [];
 const tabCreates = [];
 let currentTabUrl = '';
+let currentDocumentId = 'test-document';
+let pendingTabUrl;
 const store = new Map();
 const jar = new Map();
 
@@ -53,7 +55,8 @@ globalThis.chrome = {
     onAlarm: { addListener: (fn) => alarmListeners.push(fn) }
   },
   webNavigation: {
-    onBeforeNavigate: { addListener: (fn) => navListeners.push(fn) }
+    onBeforeNavigate: { addListener: (fn) => navListeners.push(fn) },
+    getFrame: async () => currentDocumentId ? ({ url: currentTabUrl, documentId: currentDocumentId }) : undefined
   },
   webRequest: {
     onCompleted: { addListener: (fn, filter) => (filter.types ? staticResponseListeners : webRequestListeners).push(fn) },
@@ -61,7 +64,7 @@ globalThis.chrome = {
     onBeforeRequest: { addListener: (fn) => beforeRequestListeners.push(fn) }
   },
   tabs: {
-    get: async (tabId) => ({ id: tabId, url: currentTabUrl }),
+    get: async (tabId) => ({ id: tabId, url: currentTabUrl, pendingUrl: pendingTabUrl }),
     reload: async (tabId) => { tabReloads.push(tabId); },
     update: async (tabId, props) => { tabUpdates.push({ tabId, ...props }); },
     create: async (props) => { tabCreates.push({ ...props }); }
@@ -1131,6 +1134,71 @@ check('the initial HTML page can recover before application JavaScript loads', t
 for (const fn of staticResponseListeners) fn({ ...staticFailure, statusCode: 431, tabId: 96, url: 'https://assets.comm100dev.io/app.css', type: 'stylesheet' });
 await sleepForCookieChecks();
 check('the retry guard covers different static hosts in the same page', tabReloads.length === reloadCount + 2);
+
+console.log('\n-- cookie recovery navigation and reload outcomes --');
+const addOverflowCookies = async () => {
+  jar.clear();
+  for (const [siteId, iat] of [[SITE_ID, 1], ['90010', 2], ['90011', 3]]) {
+    await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/', name: `token_${siteId}`, value: largeJwt(iat) });
+  }
+};
+const nativeRemoveCookie = chrome.cookies.remove;
+const nativeReloadTab = chrome.tabs.reload;
+for (const [index, scenario] of [
+  { name: 'SPA URL changes still reload the same document', reload: true,
+    change: () => { currentTabUrl = `https://${HOST}/ui/${SITE_ID}/livechat/dashboard/`; } },
+  { name: 'fragment changes still reload the same document', reload: true,
+    change: () => { currentTabUrl += '#loaded'; } },
+  { name: 'another document at the same URL is left alone', reload: false,
+    change: () => { currentDocumentId = 'replacement-document'; } },
+  { name: 'a missing document after cleanup is left alone', reload: false,
+    change: () => { currentDocumentId = undefined; } },
+  { name: 'a pending navigation is left alone', reload: false,
+    change: () => { pendingTabUrl = `https://${HOST}/ui/${SITE_ID}/other/`; } },
+  { name: 'a rejected reload releases its retry guard', reload: false, rejectReload: true },
+  { name: 'initial HTML requests ignore the tab fragment', reload: true, mainFrame: true },
+  { name: 'late asset failures from a previous document are ignored', reload: false, stale: true }
+].entries()) {
+  const tabId = 200 + index;
+  currentTabUrl = `https://${HOST}/ui/${SITE_ID}/entry/${scenario.mainFrame ? '#details' : ''}`;
+  currentDocumentId = `recovery-document-${index}`;
+  pendingTabUrl = undefined;
+  await addOverflowCookies();
+  const beforeReloads = tabReloads.length;
+  const beforeBytes = cookieBudget.cookieHeaderBytes(await cookies.getAllCookies(`https://${HOST}`));
+  chrome.cookies.remove = async (details) => {
+    await nativeRemoveCookie(details);
+    scenario.change?.();
+  };
+  chrome.tabs.reload = scenario.rejectReload ? async () => { throw new Error('test reload rejection'); } : nativeReloadTab;
+  const failure = { ...staticFailure, tabId, documentId: scenario.stale ? 'old-document' : currentDocumentId,
+    ...(scenario.mainFrame ? { type: 'main_frame', url: currentTabUrl.split('#')[0] } : {}) };
+  for (const fn of staticResponseListeners) fn(failure);
+  await sleepForCookieChecks();
+  chrome.cookies.remove = nativeRemoveCookie;
+  chrome.tabs.reload = nativeReloadTab;
+  const guarded = Boolean(store.get('comm100StaticRecovery')?.[`${tabId}|${HOST}`]);
+  check(scenario.name, tabReloads.length === beforeReloads + Number(scenario.reload) && guarded === scenario.reload);
+  const recoveryEvent = (await storage.getState()).events.find((e) => e.kind === 'cookie-budget');
+  if (scenario.reload) {
+    check('successful reload is reported after Chrome accepts it', recoveryEvent?.detail.endsWith('page reload requested once'));
+    for (const fn of staticResponseListeners) fn({ ...failure, statusCode: 431 });
+    await sleepForCookieChecks();
+    check('same-document recovery still permits only one reload', tabReloads.length === beforeReloads + 1);
+  } else if (scenario.stale) {
+    check('stale document failures do not remove any cookies', cookieBudget.cookieHeaderBytes(await cookies.getAllCookies(`https://${HOST}`)) === beforeBytes);
+  } else {
+    const outcome = scenario.rejectReload ? 'page reload failed: test reload rejection' : 'reload skipped: tab is navigating to another page';
+    check('the activity log explains the unsuccessful reload', recoveryEvent?.detail.endsWith(outcome));
+  }
+  if (scenario.rejectReload) {
+    await addOverflowCookies();
+    for (const fn of staticResponseListeners) fn(failure);
+    await waitFor(() => tabReloads.length > beforeReloads);
+    check('a failed reload does not block a later recovery', tabReloads.length === beforeReloads + 1);
+  }
+}
+pendingTabUrl = undefined;
 
 // Make the evicted site the keep-alive's only target, so this checks suppression rather than
 // merely relying on an unrelated current site's still-fresh cookie.

@@ -1151,7 +1151,14 @@ async function recoverStaticRequest(details) {
   if (!isSupportedHost(target.host)) return;
   const tab = await chrome.tabs.get(details.tabId);
   const page = new URL(tab.url);
-  if (details.type === 'main_frame' && page.href !== target.href) return;
+  const frame = await chrome.webNavigation.getFrame({ tabId: details.tabId, frameId: 0 });
+  const documentId = frame?.documentId;
+  // Fragments are not sent in HTTP requests, but remain in the tab's URL.
+  const pageRequestUrl = new URL(page.href);
+  pageRequestUrl.hash = '';
+  target.hash = '';
+  if (details.type === 'main_frame' && pageRequestUrl.href !== target.href) return;
+  if (details.type !== 'main_frame' && details.documentId && documentId && details.documentId !== documentId) return;
   // The failed response may belong to a page the user has already left.
   if (registrableDomain(page.hostname) !== registrableDomain(target.hostname)) return;
   const saved = await chrome.storage.local.get(STATIC_RECOVERY_KEY);
@@ -1171,15 +1178,33 @@ async function recoverStaticRequest(details) {
     note('cookie-budget', `${target.host}: ${result.beforeBytes} bytes; cannot reduce without removing the current session or unrelated cookies`);
     return;
   }
+  const summary = `${target.host}: ${result.beforeBytes} -> ${result.afterBytes} bytes; removed sites ${result.removedSiteIds.join(', ')}`;
+  // pushState and hash changes keep the same document. A URL comparison alone skipped the
+  // reload during SPA startup, after already logging and consuming the one permitted retry.
+  const current = await chrome.tabs.get(details.tabId);
+  const currentFrame = await chrome.webNavigation.getFrame({ tabId: details.tabId, frameId: 0 });
+  const sameDocument = documentId
+    ? documentId === currentFrame?.documentId
+    : current.url === tab.url;
+  if (!sameDocument || (current.pendingUrl && current.pendingUrl !== current.url)) {
+    note('cookie-budget', `${summary}; reload skipped: tab is navigating to another page`);
+    return;
+  }
   // Discard expired retry records so this map remains bounded as tabs are opened and closed.
   const now = Date.now();
   const recent = Object.fromEntries(Object.entries(recoveries).filter(([, at]) => now - at < STATIC_RECOVERY_WINDOW_MS));
   recent[key] = now;
+  // Reserve immediately before the attempt so a worker restart cannot create a reload loop.
   await chrome.storage.local.set({ [STATIC_RECOVERY_KEY]: recent });
-  note('cookie-budget', `${target.host}: ${result.beforeBytes} -> ${result.afterBytes} bytes; removed sites ${result.removedSiteIds.join(', ')}; retrying page once`);
-  // Check again after async cookie work; never reload a different page opened in this tab.
-  const current = await chrome.tabs.get(details.tabId);
-  if (current.url === tab.url) await chrome.tabs.reload(details.tabId);
+  try {
+    await chrome.tabs.reload(details.tabId);
+  } catch (err) {
+    delete recent[key];
+    await chrome.storage.local.set({ [STATIC_RECOVERY_KEY]: recent });
+    note('cookie-budget', `${summary}; page reload failed: ${err?.message || err}`);
+    return;
+  }
+  note('cookie-budget', `${summary}; page reload requested once`);
 }
 
 /**
