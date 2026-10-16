@@ -142,7 +142,7 @@ npm version patch
 git push origin main --follow-tags
 ```
 
-The tag must match the package version, such as `v1.0.1`. CI installs dependencies, runs the test
+The tag must match the package version, such as `v0.0.2`. CI installs dependencies, runs the test
 suite, builds the extension during packing, and publishes the package with public access.
 
 ## How it works

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Comm100 Auto Login",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "Silently signs in to Comm100 test dashboards with saved credentials, preferring the most recently used account.",
   "minimum_chrome_version": "116",
   "permissions": [
