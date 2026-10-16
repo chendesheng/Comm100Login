@@ -43,10 +43,19 @@ comm100-accounts setup
 Setup registers a [Chrome native messaging host](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
 for this extension and profile. It uses one temporary LevelDB snapshot to discover the profile's
 connection ID; it never opens Chrome's original database. The launcher uses this installation's
-absolute Node.js path, so Chrome does not need Node on its PATH. Setup currently supports Chrome on
-macOS and Linux. Chrome must be running, with the extension enabled, for subsequent CLI commands.
+absolute Node.js path, so Chrome does not need Node on its PATH. Setup supports Chrome on Windows,
+macOS, and Linux. Chrome must be running, with the extension enabled, for subsequent CLI commands.
 
-All normal reads and writes go through the extension service worker over a private local socket.
+On Windows, setup installs the launcher and configuration in `%LOCALAPPDATA%\comm100-accounts`
+and registers the native host under
+`HKCU\Software\Google\Chrome\NativeMessagingHosts\com.comm100.accounts` for the current user;
+administrator access is not required. Communication uses a Windows named pipe. The same install,
+`extension-path`, and `setup` commands work in PowerShell and Command Prompt. If PowerShell blocks
+npm's script launcher, use `npm.cmd` and `comm100-accounts.cmd`. After a Node.js installation moves,
+run setup again so the launcher uses its new path.
+
+All normal reads and writes go through the extension service worker over local IPC (a Windows
+named pipe or a Unix socket).
 Accounts and JWTs share the extension's `chrome.storage.local` state; no database snapshots are
 made for `list`, `login`, or `tokens`, and there is no separate JWT cache file. Bridge configuration
 contains only profile/connection metadata, not credentials or tokens.

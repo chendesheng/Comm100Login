@@ -91,7 +91,8 @@ export async function readChromeState(source) {
     let db;
     try {
       const snapshot = join(temporary, 'db');
-      await cp(source, snapshot, { recursive: true });
+      // Chrome holds LOCK exclusively on Windows. The snapshot creates its own lock.
+      await cp(source, snapshot, { recursive: true, filter: (path) => basename(path) !== 'LOCK' });
       db = new ClassicLevel(snapshot, { keyEncoding: 'utf8', valueEncoding: 'json', createIfMissing: false });
       const raw = await db.get('comm100AutoLogin');
       if (!raw || !Array.isArray(raw.accounts)) throw new Error('The database has no Comm100 account list.');

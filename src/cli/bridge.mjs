@@ -35,12 +35,12 @@ export function messageReader(onMessage, onError) {
 }
 
 export function socketDirectory() {
-  if (platform() === 'win32') throw new Error('The native CLI bridge currently supports macOS and Linux.');
   return `/tmp/comm100-accounts-${process.getuid()}`;
 }
 
-export function socketPath(bridgeId) {
+export function socketPath(bridgeId, os = platform()) {
   if (!/^[a-f0-9-]{36}$/i.test(bridgeId || '')) throw new Error('Reload the updated extension, then run comm100-accounts setup.');
+  if (os === 'win32') return `\\\\.\\pipe\\comm100-accounts-${bridgeId}`;
   return join(socketDirectory(), `${bridgeId}.sock`);
 }
 
@@ -50,7 +50,9 @@ export function chromeDataDirectory() {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'google-chrome');
 }
 
-export const bridgeConfigDirectory = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'comm100-accounts');
+export const bridgeConfigDirectory = () => join(platform() === 'win32'
+  ? process.env.LOCALAPPDATA || join(homedir(), 'AppData/Local')
+  : process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'comm100-accounts');
 export const bridgeConfigFile = () => join(bridgeConfigDirectory(), 'bridge.json');
 
 export async function readBridgeConfig(filename = bridgeConfigFile()) {

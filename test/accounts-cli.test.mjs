@@ -152,6 +152,19 @@ test('legacy account scope and site are normalized identically to the extension'
   assert.equal(read.accounts[0].siteId, '123');
 });
 
+test('setup snapshot ignores the source LOCK entry and leaves it untouched', async (t) => {
+  const f = await fixture(t, [account('snapshot@example.com')]);
+  await f.db.close();
+  const lock = join(f.location, 'LOCK');
+  await rm(lock, { force: true });
+  // A directory in place of LOCK makes the copied database unusable unless omitted.
+  await mkdir(lock);
+  await writeFile(join(lock, 'untouched'), 'source lock');
+  const snapshot = await readChromeState(f.location);
+  assert.equal(snapshot.accounts[0].email, 'snapshot@example.com');
+  assert.equal(await readFile(join(lock, 'untouched'), 'utf8'), 'source lock');
+});
+
 test('login saves a JWT through the worker and reuses it without another network request', async (t) => {
   const f = await fixture(t, [account('a@example.com')]);
   let calls = 0;
