@@ -283,6 +283,50 @@ export function filterAccounts(accounts, { domain = FILTER_ANY, siteId = FILTER_
   });
 }
 
+/** A value that names a scope sorts before the empty wildcard. */
+const scopedFirst = (a, b) => (a ? 0 : 1) - (b ? 0 : 1);
+/**
+ * `localeCompare`, not `<`: it is what the popup's own filters use, and it orders `alpha` before
+ * `Beta` — an address is written by a human, so case must not decide where it lands. The collation
+ * is pinned to one language because the two callers run in different places (Node in a terminal,
+ * the popup in Chrome, each with its own default locale) and must not order the same list
+ * differently.
+ */
+const compareText = (a, b) => a.localeCompare(b, 'en');
+/** Site ids are numbers: converting first puts site 9999 before site 10002, as a human reads them. */
+const compareSiteIds = (a, b) => Number(a) - Number(b) || compareText(a, b);
+
+/**
+ * The order every account list uses — the popup's Accounts section and `comm100-accounts list`:
+ * dashboard first, then site, then address.
+ *
+ * That is also the order the questions get asked in: credentials are scoped per dashboard, so the
+ * dashboard groups the list; inside one dashboard the site id is what tells two rows apart; and the
+ * address is the part a human finally reads to pick one. Sorting by "recently used" instead makes
+ * the list reshuffle under the user every time the extension signs in somewhere.
+ *
+ * Records with nothing recorded — a legacy credential with no dashboard, an account that has never
+ * signed in anywhere — are the wildcard fallback rather than one dashboard among the others, so they
+ * sort last, the same reason the filters read `any dashboard`.
+ *
+ * A site id is a number: `10002` belongs after `9999`, and comparing the padded strings would put it
+ * before. A value that is not a number at all (a hand-edited site) converts to NaN, which falls
+ * through to plain text order, so it still has a stable place in the list.
+ */
+export const compareAccountOrder = (a, b) => {
+  const domainA = normalizeDomain(a.domain);
+  const domainB = normalizeDomain(b.domain);
+  const siteA = normalizeSiteId(a.siteId) || '';
+  const siteB = normalizeSiteId(b.siteId) || '';
+  return (
+    scopedFirst(domainA, domainB) ||
+    compareText(domainA, domainB) ||
+    scopedFirst(siteA, siteB) ||
+    compareSiteIds(siteA, siteB) ||
+    compareText(normalizeEmail(a.email), normalizeEmail(b.email))
+  );
+};
+
 /** Every account already tied to a *different* site on this dashboard, for explaining a refusal. */
 export function otherSitesOn(state, domain, siteId) {
   const wanted = normalizeSiteId(siteId);

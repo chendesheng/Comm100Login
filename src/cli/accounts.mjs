@@ -7,14 +7,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ClassicLevel } from 'classic-level';
 import { dashboardOriginFor, getByEmail, jwtLogin, needsSecondFactor, normalizeSite, routeOriginFor } from '../shared/api.js';
 import { jwtExpirySeconds } from '../shared/cookies.js';
-import { effectivePassword, filterAccounts, normalizeDomain, normalizeState } from '../shared/storage.js';
+import { compareAccountOrder, effectivePassword, filterAccounts, normalizeDomain, normalizeState } from '../shared/storage.js';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
   comm100-accounts login <email> [--domain=HOST] [--siteId=ID]
 
-list   Print siteId (12 columns), email (30 columns), and domain, with optional filters.
+list   Print siteId (12 columns), email (30 columns), and domain, ordered by domain, site id,
+       then email, with optional filters.
 login  Print a valid cached JWT, or sign in once and save the new JWT.
 
 Options:
@@ -245,12 +246,14 @@ export async function run(args, { stdout = process.stdout } = {}) {
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
   const state = await readChromeState(await findDatabase(values));
   if (command === 'list') {
+    // One order for every account list: the popup's Accounts section sorts the same way.
     const rows = [...new Set(filterAccounts(state.accounts, { domain: values.domain, siteId: values.siteId })
       .filter((account) => account.email)
+      .sort(compareAccountOrder)
       .map((account) => {
         const password = values['show-password'] ? `${String(effectivePassword(account) || '-').padEnd(20)} ` : '';
         return `${String(account.siteId || '-').padEnd(12)} ${account.email.padEnd(30)} ${password}${account.domain || '-'}`;
-      }))].sort();
+      }))];
     if (rows.length) stdout.write(rows.join('\n') + '\n');
   } else {
     stdout.write(await login(state, email, values) + '\n');

@@ -26,9 +26,10 @@ comm100-accounts login agent@example.com --siteId=10010
 comm100-accounts login agent@example.com --domain=livechat6dash.testing.comm100dev.io
 ```
 
-`list` prints unique rows in `siteId`, email, domain order. Site IDs are padded to 12 characters and
-emails to 30 characters, separated by a space; longer values are preserved. Unknown sites or domains
-appear as `-`. Domain and site filters are optional. `login` prints only
+`list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
+columns. Site IDs are padded to 12 characters and emails to 30 characters, separated by a space;
+longer values are preserved. Site ids compare as numbers (site 9999 before site 10002). Unknown sites
+or domains appear as `-` and sort last. Domain and site filters are optional. `login` prints only
 the JWT, so it can be captured with `token="$(comm100-accounts login agent@example.com)"`. Errors go
 to stderr with a nonzero exit status.
 
@@ -427,8 +428,9 @@ flags saved by older versions are ignored and removed by the next normal storage
   unaffected by which site the current URL happens to name. If the sign-in fails, no tab is opened
   and the reason is shown in the popup's status line instead.
 - **Open a Comm100 dashboard** — you are signed in before the page needs the session.
-- **Show / Edit / Delete** per account. The account list is always newest-first, and each row shows
-  the dashboard it belongs to and the site id it resolved to.
+- **Show / Edit / Delete** per account. The account list is ordered by dashboard, then site id, then
+  email — the same order `comm100-accounts list` prints, so the newest sign-in no longer reshuffles
+  it — and each row shows the dashboard it belongs to and the site id it resolved to.
 - **Edit** turns the row into its address and password fields, and *Save & verify* calls the login API
   so a replacement password is only trusted once it is proven — a typo is caught immediately rather
   than at the next sign-in. There is no dashboard or site field: an account is identified by

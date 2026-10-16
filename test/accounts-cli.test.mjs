@@ -59,8 +59,35 @@ test('list aligns site/email/domain rows while the source LevelDB remains locked
   assert.equal(output.text(), `10003        c@example.com                  ${other}\n`);
   output = capture();
   await run(['list', '--db', f.location], output);
-  assert.equal(output.text(), `10001        a@example.com                  ${host}\n10001        b@example.com                  ${host}\n10002        a@example.com                  ${host}\n10003        c@example.com                  ${other}\n`);
+  // Dashboards order first, so livechat3 (site 10003) precedes every livechat6 row.
+  assert.equal(output.text(), `10003        c@example.com                  ${other}\n10001        a@example.com                  ${host}\n10001        b@example.com                  ${host}\n10002        a@example.com                  ${host}\n`);
   assert.deepEqual(await f.db.get('comm100AutoLogin'), original);
+});
+
+test('list orders rows by dashboard, then site id, then email', async (t) => {
+  const alpha = 'alphadash.testing.comm100dev.io';
+  const beta = 'betadash.testing.comm100dev.io';
+  // The same rendering the CLI uses, so a padding change cannot silently move a column.
+  const row = (siteId, email, domain) => `${siteId.padEnd(12)} ${email.padEnd(30)} ${domain}`;
+  const f = await fixture(t, [
+    account('zeta@example.com', beta, '10002'),
+    account('Beta@example.com', alpha, '10002'),
+    account('alpha@example.com', alpha, '10002'),
+    account('a@example.com', alpha, '9999'),
+    account('unscoped@example.com', null, null)
+  ]);
+  const output = capture();
+  await run(['list', '--db', f.location], output);
+  assert.equal(
+    output.text(),
+    [
+      row('9999', 'a@example.com', alpha), // Site ids are numbers: 9999 before 10002.
+      row('10002', 'alpha@example.com', alpha), // Email is the last key, so a capital B waits its turn.
+      row('10002', 'Beta@example.com', alpha),
+      row('10002', 'zeta@example.com', beta),
+      row('-', 'unscoped@example.com', '-') // Nothing recorded is the fallback: last, not first.
+    ].join('\n') + '\n'
+  );
 });
 
 test('passwords appear only with --show-password, in a 20-character third column', async (t) => {

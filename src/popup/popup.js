@@ -115,8 +115,10 @@ const accountSiteKey = (account) => store.normalizeSiteId(account.siteId) || sto
 
 /** Unscoped entries sort last: they are the fallback, not what the filter is usually after. */
 const unscopedLast = (a, b) => (a === store.FILTER_UNSCOPED ? 1 : 0) - (b === store.FILTER_UNSCOPED ? 1 : 0);
-const byDomain = (a, b) => unscopedLast(a, b) || a.localeCompare(b);
-const bySite = (a, b) => unscopedLast(a, b) || Number(a) - Number(b) || a.localeCompare(b);
+/** The same rules the account list itself sorts by, so the choices and the rows never disagree. */
+const byText = (a, b) => a.localeCompare(b, 'en');
+const byDomain = (a, b) => unscopedLast(a, b) || byText(a, b);
+const bySite = (a, b) => unscopedLast(a, b) || Number(a) - Number(b) || byText(a, b);
 
 /**
  * Rebuilds a filter select, keeping "all" first, and returns the value that ended up selected.
@@ -214,12 +216,12 @@ async function render() {
   refusalEl.hidden = !(refusal && context.supported);
   if (refusal) refusalEl.textContent = refusal.message || `Not signing in (${refusal.reason}).`;
 
-  // Account list, newest first
+  // Account list: dashboard, then site, then address — the same order `comm100-accounts list`
+  // prints, and deliberately not "most recently used", which used to reshuffle the list the moment
+  // the extension signed in somewhere.
   const list = el('accounts');
   list.textContent = '';
-  const sorted = state.accounts
-    .slice()
-    .sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0));
+  const sorted = state.accounts.slice().sort(store.compareAccountOrder);
 
   renderAccountFilters(sorted);
   const visible = store.filterAccounts(sorted, { domain: filterDomain, siteId: filterSite });
@@ -233,8 +235,8 @@ async function render() {
   orderHint.hidden = state.accounts.length < 2;
   orderHint.textContent =
     visible.length === sorted.length
-      ? 'newest first'
-      : `showing ${visible.length} of ${sorted.length}, newest first`;
+      ? 'by dashboard, site, email'
+      : `showing ${visible.length} of ${sorted.length}, by dashboard, site, email`;
 
   // "Nothing happens on this dashboard" is almost always this: a credential exists, but for another
   // dashboard. Say so instead of leaving the user to work it out from the rows below.
