@@ -1,22 +1,30 @@
-import { cp, chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { homedir, platform, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { cp, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { setTimeout as delay } from 'node:timers/promises';
 import { ClassicLevel } from 'classic-level';
 import { dashboardOriginFor, getByEmail, jwtLogin, needsSecondFactor, normalizeSite, routeOriginFor } from '../shared/api.js';
-import { expirySecondsFor, jwtExpirySeconds, tokenCookieName, tokenExpireCookieName } from '../shared/cookies.js';
+import { expirySecondsFor, tokenCookieName, tokenExpireCookieName } from '../shared/cookies.js';
 import { compareAccountOrder, effectivePassword, filterAccounts, normalizeDomain, normalizeState } from '../shared/storage.js';
+
+import { cachedToken, tokenIsFresh } from '../shared/tokens.js';
+import { chromeDataDirectory, requestBridge } from './bridge.mjs';
+import { installBridge } from './setup.mjs';
+export { tokenIsFresh } from '../shared/tokens.js';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
   comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
+  comm100-accounts tokens [--domain=HOST] [--siteId=ID]
+  comm100-accounts setup [--profile=PATH_OR_NAME]
 
 list   Print siteId (12 columns), email (30 columns), and domain, ordered by domain, site id,
        then email, with optional filters.
 login  Print a valid cached JWT, or sign in once and save the new JWT.
+tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
+setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 
 Options:
   --domain=HOST          Filter by dashboard; login defaults to $NAMESPACE + dash.testing.comm100dev.io
@@ -26,11 +34,11 @@ Options:
   --show-password       Include a 20-character password column after email (list only)
   --profile=PATH_OR_NAME  Chrome profile directory (default: Chrome's Default profile)
   --db=PATH              Extension LevelDB directory; overrides profile discovery
-  --token-file=PATH      JWT cache file (default: ~/.config/comm100-accounts/tokens.json)
   --help                 Show this help
 
-Chrome's database is copied to a temporary directory and never opened in place.
-Only account rows, the JWT, or the cookie string go to stdout. Errors go to stderr. No browser cookies are changed.
+Normal commands read/write through the extension service worker; Chrome must be running.
+Only setup reads a temporary database snapshot. JWTs are stored with accounts in Chrome storage.
+Only command results go to stdout. Errors go to stderr. No browser cookies are changed.
 `;
 
 export function defaultDomain(namespace = process.env.NAMESPACE) {
@@ -39,12 +47,6 @@ export function defaultDomain(namespace = process.env.NAMESPACE) {
     throw new Error('NAMESPACE must be a valid dashboard name prefix.');
   }
   return `${namespace.toLowerCase()}dash.testing.comm100dev.io`;
-}
-
-function chromeDataDirectory() {
-  if (platform() === 'darwin') return join(homedir(), 'Library/Application Support/Google/Chrome');
-  if (platform() === 'win32') return join(process.env.LOCALAPPDATA || join(homedir(), 'AppData/Local'), 'Google/Chrome/User Data');
-  return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'google-chrome');
 }
 
 export async function findDatabase({ db, profile } = {}) {
@@ -98,58 +100,37 @@ export async function readChromeState(source) {
   }
 }
 
-function defaultTokenFile() {
-  return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'comm100-accounts/tokens.json');
+function isoTime(milliseconds) {
+  if (!Number.isFinite(milliseconds)) return null;
+  const date = new Date(milliseconds);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
-export async function readTokens(path) {
-  try {
-    const value = JSON.parse(await readFile(path, 'utf8'));
-    if (value.version !== 1 || !Array.isArray(value.tokens)) throw new Error('invalid cache');
-    return value.tokens;
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw new Error('Cannot read JWT cache. Check --token-file (expected a tokens.json file created by this CLI).');
+function tokenDetails(record, now) {
+  const details = {
+    email: record.email, domain: record.domain, siteId: record.siteId,
+    jwtToken: record.jwtToken, fresh: tokenIsFresh(record, now),
+    expireTime: record.expireTime || null, savedAt: isoTime(record.savedAt),
+    header: null, payload: null
+  };
+  const parts = typeof record.jwtToken === 'string' ? record.jwtToken.split('.') : [];
+  if (parts.length !== 3) {
+    return { ...details, decodeError: 'Expected a JWT with three dot-separated parts.' };
   }
-}
-
-export function tokenIsFresh(record, now = Date.now()) {
-  if (typeof record.jwtToken !== 'string' || record.jwtToken.split('.').length !== 3) return false;
-  const exp = jwtExpirySeconds(record.jwtToken);
-  const serverExpiry = Date.parse(record.expireTime);
-  const until = Math.min(exp ? exp * 1000 : Infinity, Number.isFinite(serverExpiry) ? serverExpiry : Infinity);
-  return Boolean(record.jwtToken) && Number.isFinite(until) && until > now;
-}
-
-const tokenKey = (record) => JSON.stringify([record.email.toLowerCase(), record.domain, String(record.siteId)]);
-
-export async function saveToken(path, record) {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const lock = `${path}.lock`;
-  // Multiple CLI processes may sign different accounts in concurrently. Serialize the
-  // read/merge/rename so one account's token does not overwrite another account's update.
-  let locked = false;
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { await mkdir(lock, { mode: 0o700 }); locked = true; break; }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      await delay(25);
+  for (const [index, name] of ['header', 'payload'].entries()) {
+    try {
+      if (!/^[A-Za-z0-9_-]+={0,2}$/.test(parts[index])) throw new Error();
+      const value = JSON.parse(Buffer.from(parts[index], 'base64url').toString('utf8'));
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+      details[name] = value;
+    } catch {
+      details.decodeError = [details.decodeError, `Cannot decode JWT ${name} as a JSON object.`].filter(Boolean).join(' ');
     }
   }
-  if (!locked) throw new Error(`JWT cache is busy. If no other CLI is running, remove ${lock} and retry.`);
-  let temporary;
-  try {
-    const records = await readTokens(path);
-    if (records.some((entry) => tokenKey(entry) === tokenKey(record) && entry.savedAt > record.savedAt)) return;
-    const tokens = records.filter((entry) => tokenKey(entry) !== tokenKey(record));
-    tokens.push(record);
-    temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, tokens }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-    await rename(temporary, path);
-  } finally {
-    try { if (temporary) await rm(temporary, { force: true }); }
-    finally { await rm(lock, { recursive: true, force: true }); }
-  }
+  details.claimTimes = Object.fromEntries(['iat', 'nbf', 'exp']
+    .filter((name) => typeof details.payload?.[name] === 'number')
+    .map((name) => [name, isoTime(details.payload[name] * 1000)]));
+  return details;
 }
 
 function selectAccount(state, email, options) {
@@ -207,22 +188,14 @@ function loginOutput(record, options) {
   return `${tokenCookieName(record.siteId)}=${record.jwtToken}; ${tokenExpireCookieName(record.siteId)}=${encodeURIComponent(expireTime)}; siteList=${record.siteId}`;
 }
 
-export async function login(state, email, options) {
+export async function login(state, email, options, request = requestBridge) {
   const selected = selectAccount(state, email, options);
   const account = selected.account;
   const domain = normalizeDomain(account.domain || selected.domain);
   if (!domain) throw new Error('This account has no dashboard recorded. Specify --domain.');
   const siteId = options.siteId || (account.siteId ? String(account.siteId) : null);
-  const tokenFile = options['token-file'] || defaultTokenFile();
-  const records = await readTokens(tokenFile);
-  const cached = records.filter((entry) => entry.email?.toLowerCase() === account.email.toLowerCase() &&
-    entry.domain === domain && (!siteId || String(entry.siteId) === siteId) &&
-    (!entry.accountId || entry.accountId === account.id))
-    .sort((a, b) => b.savedAt - a.savedAt)[0];
-  if (cached && tokenIsFresh(cached)) {
-    await chmod(tokenFile, 0o600);
-    return loginOutput(cached, options);
-  }
+  const cached = cachedToken(state, account, domain, siteId);
+  if (cached) return loginOutput(cached, options);
   const password = effectivePassword(account);
   if (!password) throw new Error('This account has no saved password. Sign in through the extension first.');
   const site = await resolveLoginSite(state, account, domain, siteId);
@@ -235,25 +208,38 @@ export async function login(state, email, options) {
   const record = { accountId: account.id, email: account.email, domain, siteId: String(site.siteId),
     jwtToken: response.jwtToken, expireTime: response.expireTime || null, savedAt: Date.now() };
   if (!tokenIsFresh(record)) throw new Error('The login service returned an expired token or no usable token expiry.');
-  await saveToken(tokenFile, record);
+  await request(options, { type: 'saveToken', token: record });
   return loginOutput(record, options);
 }
 
-export async function run(args, { stdout = process.stdout } = {}) {
+export async function run(args, { stdout = process.stdout, request = requestBridge } = {}) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
-    profile: { type: 'string' }, 'token-file': { type: 'string' },
+    profile: { type: 'string' },
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }
   } });
   if (values.help || !positionals.length) { stdout.write(help); return; }
   const [command, email] = positionals;
-  if (!['list', 'login'].includes(command) || positionals.length !== (command === 'list' ? 1 : 2)) {
-    throw new Error('Use "list" or "login <email>". See --help.');
+  if (!['list', 'login', 'tokens', 'setup'].includes(command) || positionals.length !== (command === 'login' ? 2 : 1)) {
+    throw new Error('Use "list", "login <email>", "tokens", or "setup". See --help.');
   }
   if (values['show-password'] && command !== 'list') throw new Error('--show-password is only supported by list.');
   if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
-  const state = await readChromeState(await findDatabase(values));
+  if (command === 'setup') {
+    const database = await findDatabase(values);
+    await installBridge(database, await readChromeState(database));
+    stdout.write('CLI bridge installed. Reload the Comm100 Auto Login extension in Chrome, then run list/login/tokens.\n');
+    return;
+  }
+  const state = normalizeState((await request(values, { type: 'getState' })).state);
+  if (command === 'tokens') {
+    const now = Date.now();
+    const details = filterAccounts(state.tokens, { domain: values.domain, siteId: values.siteId })
+      .sort(compareAccountOrder).map((record) => tokenDetails(record, now));
+    stdout.write(JSON.stringify(details, null, 2) + '\n');
+    return;
+  }
   if (command === 'list') {
     // One order for every account list: the popup's Accounts section sorts the same way.
     const rows = [...new Set(filterAccounts(state.accounts, { domain: values.domain, siteId: values.siteId })
@@ -265,6 +251,6 @@ export async function run(args, { stdout = process.stdout } = {}) {
       }))];
     if (rows.length) stdout.write(rows.join('\n') + '\n');
   } else {
-    stdout.write(await login(state, email, values) + '\n');
+    stdout.write(await login(state, email, values, request) + '\n');
   }
 }

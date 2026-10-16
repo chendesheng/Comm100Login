@@ -108,6 +108,8 @@ export function normalizeState(raw) {
     accounts: (Array.isArray(state.accounts) ? state.accounts : [])
       .map(withDomain)
       .map((account) => withSite(account, routes)),
+    tokens: Array.isArray(state.tokens) ? state.tokens : [],
+    cliBridgeId: typeof state.cliBridgeId === 'string' ? state.cliBridgeId : null,
     routes,
     hostState,
     events: Array.isArray(state.events) ? state.events : []
@@ -118,6 +120,38 @@ export async function getState() {
   const raw = await chrome.storage.local.get(KEY);
   return normalizeState(raw && raw[KEY]);
 }
+
+export const ensureCliBridgeId = () => mutate((state) => {
+  state.cliBridgeId ||= crypto.randomUUID();
+  return state.cliBridgeId;
+});
+
+/** The worker is the only writer, using the same queue as account updates. */
+export const saveToken = (record) => mutate((state) => {
+  const account = state.accounts.find((a) => a.id === record.accountId);
+  const domain = normalizeDomain(record.domain);
+  const siteId = normalizeSiteId(record.siteId);
+  if (!account || normalizeEmail(account.email) !== normalizeEmail(record.email) ||
+      (account.domain && normalizeDomain(account.domain) !== domain) || !domain || !siteId ||
+      (account.siteId && String(account.siteId) !== siteId) ||
+      typeof record.jwtToken !== 'string' || !record.jwtToken) {
+    throw new Error('Token does not match a saved account and dashboard/site.');
+  }
+  const token = {
+    accountId: account.id, email: account.email, domain, siteId,
+    jwtToken: record.jwtToken, expireTime: record.expireTime || null, savedAt: Date.now()
+  };
+  account.domain ||= domain;
+  account.siteId ||= siteId;
+  state.tokens = state.tokens.filter((entry) => !(entry.accountId === account.id &&
+    entry.domain === domain && String(entry.siteId) === siteId));
+  state.tokens.push(token);
+  return token;
+});
+
+export const invalidateToken = (jwtToken) => mutate((state) => {
+  state.tokens = state.tokens.filter((entry) => entry.jwtToken !== jwtToken);
+});
 
 /**
  * A small rolling log of what the worker actually did and why.
@@ -438,6 +472,7 @@ export const markSuccess = ({ accountId, host, site, domain }) =>
 export const removeAccount = (accountId) =>
   mutate((state) => {
     state.accounts = state.accounts.filter((a) => a.id !== accountId);
+    state.tokens = state.tokens.filter((entry) => entry.accountId !== accountId);
   });
 
 /**
@@ -548,7 +583,12 @@ export const putRoute = (host, email, site) =>
  * and its write — and the write then puts back everything the user just erased (a recorded event, a
  * use counter, a re-planted session). Serialised, a clear can only fall between writes.
  */
-export const clearAll = () => serialize(() => chrome.storage.local.remove(KEY));
+export const clearAll = () => serialize(async () => {
+  const state = await getState();
+  // Connection identity contains no credentials and must survive clearing account data.
+  if (state.cliBridgeId) await chrome.storage.local.set({ [KEY]: { cliBridgeId: state.cliBridgeId } });
+  else await chrome.storage.local.remove(KEY);
+});
 
 export const exportState = () => getState();
 
@@ -559,6 +599,7 @@ export const importState = (text) =>
       // Same legacy sweep as getState(): a file exported before domains existed still lands pinned
       // to whatever dashboard it was last used on.
       state.accounts = incoming.accounts.map(withDomain);
+      state.tokens = [];
     } else {
       throw new Error('Imported JSON has no "accounts" array');
     }

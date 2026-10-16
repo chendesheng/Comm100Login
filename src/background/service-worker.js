@@ -36,6 +36,8 @@ import {
   tokenCookieName
 } from '../shared/cookies.js';
 import * as store from '../shared/storage.js';
+import { cachedToken } from '../shared/tokens.js';
+import { startCliBridge } from './cli-bridge.js';
 import {
   COOKIE_HEADER_BUDGET_BYTES,
   cookieHeaderBytes,
@@ -52,6 +54,8 @@ import {
  * worth reading from a log capped at 40 entries.
  */
 const QUIET_OUTCOMES = new Set(['cooldown', 'logged-out', 'no-account']);
+
+startCliBridge();
 
 /** host + site -> in-flight promise, so concurrent tabs share one login attempt. */
 const inFlight = new Map();
@@ -582,7 +586,12 @@ async function runEnsureAuth({
   await store.noteAttempt(targetHost);
   await setBadge('...');
 
-  const login = await jwtLogin(site.portalUrl, {
+  const rejected = rejectedToken || (forceRefresh ? await tokenFor(targetHost, site.siteId) : null);
+  if (rejected) await store.invalidateToken(rejected);
+  const cached = cachedToken(state, account, targetHost, site.siteId, {
+    minRemainingMs, rejectedToken: rejected
+  });
+  const login = cached || await jwtLogin(site.portalUrl, {
     email: account.email,
     password: store.effectivePassword(account),
     siteId: site.siteId
@@ -649,6 +658,8 @@ async function runEnsureAuth({
     domain: targetHost,
     site: { ...site, lastEmail: account.email }
   });
+  if (!cached) await store.saveToken({ accountId: account.id, email: account.email, domain: targetHost,
+    siteId: site.siteId, jwtToken: login.jwtToken, expireTime: login.expireTime });
   rememberSession(targetHost, site.siteId, planted.session && planted.session.expiresAt, login.jwtToken);
   await setBadge(null);
   log('signed in', targetHost, account.email, 'site', site.siteId, 'planted', planted.planted);
@@ -778,7 +789,11 @@ async function verifyAccount(accountId, fallbackHost) {
   await store.resolvePending({ accountId, ok });
   // Remember the site even when the password was rejected: "wrong password for site 10010" is a
   // more useful record than "wrong password".
-  if (ok) await store.noteSite({ accountId, site, domain: targetDomain });
+  if (ok) {
+    await store.noteSite({ accountId, site, domain: targetDomain });
+    await store.saveToken({ accountId, email: account.email, domain: targetDomain,
+      siteId: site.siteId, jwtToken: login.jwtToken, expireTime: login.expireTime });
+  }
   log('verified credentials', account.email, targetDomain, ok ? 'verified' : `rejected (${login.errorCode})`);
   return { ok, siteId: site.siteId, errorCode: login.errorCode, errorMessage: login.errorMessage };
 }

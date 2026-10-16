@@ -206,7 +206,7 @@ globalThis.fetch = async (input, init) => {
   return realFetch(input, init);
 };
 
-const ROOT = 'file:///Users/roy/Sources/Comm100Login/src';
+const ROOT = new URL('../src', import.meta.url).href;
 const api = await import(`${ROOT}/shared/api.js`);
 const platforms = await import(`${ROOT}/shared/platforms.js`);
 const storage = await import(`${ROOT}/shared/storage.js`);
@@ -1067,7 +1067,7 @@ check('the live cookie wins over an older cached token', liveCookie.jwt === repl
 
 beforeRequests = loginCalls;
 const rejectedSessions = await Promise.all(Array.from({ length: 8 }, () => call({ ...requestMessage, rejectedToken: replacementJwt }, requestSender)));
-check('concurrent 401 retries share one renewal', loginCalls === beforeRequests + 1, loginCalls - beforeRequests);
+check('concurrent 401 retries reuse a shared token different from the rejected cookie', loginCalls === beforeRequests, loginCalls - beforeRequests);
 check('all rejected requests receive the replacement JWT', rejectedSessions.every((r) => r.ok && r.jwt === 'stub.slow.token'), rejectedSessions);
 const invalidRequest = await call({ ...requestMessage, url: 'https://example.com/api/test' }, requestSender);
 check('the bridge refuses to disclose a token to another origin', !invalidRequest.ok && !invalidRequest.jwt, invalidRequest);
@@ -1145,6 +1145,23 @@ await sleepForCookieChecks();
 check('keep-alive leaves evicted sites dormant', loginCalls === beforeRequests);
 const revisit = await call({ type: 'ensureAuth', domain: HOST, siteId: evictedSite.siteId, force: true });
 check('a real visit can sign an evicted site in again', revisit.ok && !await cookieBudget.isSessionPruned(HOST, evictedSite.siteId), revisit);
+
+console.log('\n-- shared CLI/browser JWT cache --');
+await armAccount('SlowLogin1');
+await dropSession();
+const sharedAccount = (await storage.getState()).accounts.find((a) => a.email === TARGET_EMAIL);
+const sharedJwt = fakeJwt(Math.floor(Date.now() / 1000) + 7200);
+await storage.saveToken({ accountId: sharedAccount.id, email: sharedAccount.email, domain: HOST,
+  siteId: SITE_ID, jwtToken: sharedJwt });
+beforeRequests = loginCalls;
+const fromSharedCache = await call({ type: 'ensureAuth', domain: HOST, siteId: SITE_ID, force: true });
+check('browser login restores a shared JWT without exchanging credentials', fromSharedCache.ok && loginCalls === beforeRequests, fromSharedCache);
+check('the shared JWT becomes the real session cookie', (await chrome.cookies.get({ url: `https://${HOST}`, name: `token_${SITE_ID}` }))?.value === sharedJwt);
+await storage.clearFailures(HOST);
+const afterRejection = await call({ type: 'ensureAuth', domain: HOST, siteId: SITE_ID,
+  force: true, forceRefresh: true, rejectedToken: sharedJwt });
+check('a server-rejected JWT is not restored from the shared cache', afterRejection.ok && loginCalls === beforeRequests + 1, afterRejection);
+check('browser credential login updates the shared cache', (await storage.getState()).tokens.some((token) => token.jwtToken === 'stub.slow.token'));
 
 console.log(`\n${failed === 0 ? 'ALL CHECKS PASSED' : `${failed} CHECK(S) FAILED`}${skipped ? ` (${skipped} skipped)` : ''}`);
 process.exit(failed === 0 ? 0 : 1);

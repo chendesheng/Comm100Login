@@ -15,6 +15,24 @@ npm install
 npm link
 ```
 
+Reload the updated extension at `chrome://extensions`, then run the one-time bridge setup:
+
+```bash
+comm100-accounts setup
+# Reload the Comm100 Auto Login extension once more to connect the installed native host.
+```
+
+Setup registers a [Chrome native messaging host](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
+for this extension and profile. It uses one temporary LevelDB snapshot to discover the profile's
+connection ID; it never opens Chrome's original database. The launcher uses this installation's
+absolute Node.js path, so Chrome does not need Node on its PATH. Setup currently supports Chrome on
+macOS and Linux. Chrome must be running, with the extension enabled, for subsequent CLI commands.
+
+All normal reads and writes go through the extension service worker over a private local socket.
+Accounts and JWTs share the extension's `chrome.storage.local` state; no database snapshots are
+made for `list`, `login`, or `tokens`, and there is no separate JWT cache file. Bridge configuration
+contains only profile/connection metadata, not credentials or tokens.
+
 ```bash
 comm100-accounts list
 comm100-accounts list --domain=livechat6dash.testing.comm100dev.io --siteId=10010
@@ -25,6 +43,9 @@ comm100-accounts login agent@example.com
 comm100-accounts login agent@example.com --siteId=10010
 comm100-accounts login agent@example.com --domain=livechat6dash.testing.comm100dev.io
 comm100-accounts login agent@example.com --cookie
+
+comm100-accounts tokens
+comm100-accounts tokens --domain=livechat6dash.testing.comm100dev.io --siteId=10010
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -58,19 +79,27 @@ dashboard. A unique match does not require `NAMESPACE`. Explicit `--domain` alwa
 multiple sites remaining on the same dashboard require `--siteId`. Among records for the same site,
 the most recently used account is preferred.
 
-The CLI discovers this extension in Chrome's `Default` profile. Use `--profile="/path/to/Profile 1"`
-to select another Chrome profile, or `--db="/path/to/Local Extension Settings/EXTENSION_ID"` to select
-its LevelDB directory directly. It reads a temporary copy and leaves the source database untouched,
-so Chrome can remain open. If copying races Chrome's database compaction, it retries up to three
-times; a persistent read failure asks you to quit Chrome and retry.
+Setup discovers this extension in Chrome's `Default` profile. Use
+`comm100-accounts setup --profile="/path/to/Profile 1"` to configure another profile, or
+`--db="/path/to/Local Extension Settings/EXTENSION_ID"` to select its LevelDB directory for setup.
+Use the same `--profile` or `--db` on subsequent commands to select that configured connection.
+The service worker owns all storage writes and serializes them with account updates, avoiding
+Chrome's LevelDB lock and stale in-memory data.
 
-The most recent JWT for each email/domain/site is stored in
-`~/.config/comm100-accounts/tokens.json` (under `$XDG_CONFIG_HOME` when set). Use `--token-file=PATH`
-to override it. This file has mode `0600`, contains no saved passwords, and is separate from Chrome's
-database. A valid cached JWT is returned without a network request; a missing or expired JWT triggers
-one login attempt and replaces that account's cached token. Both the JWT's `exp` and the server's
-expiry time are checked. Two-factor accounts require browser sign-in. No browser cookies or saved
-passwords are changed, and failed credentials are never automatically retried.
+CLI login reuses a fresh JWT from the shared cache. Otherwise it attempts credential login once and
+asks the service worker to save the result. Browser login can reuse that same JWT to restore session
+cookies; successful browser sign-ins also update the shared cache. Both the JWT's `exp` and the
+server's expiry time are checked, tokens too close to expiry are renewed, and a server-rejected JWT
+is removed from the cache. Two-factor accounts require browser sign-in. CLI login does not change
+browser cookies, and failed credentials are never automatically retried.
+
+`tokens` prints all shared cached JWTs, including expired tokens, as a formatted JSON array ordered
+by dashboard, site id, and email. Each entry includes the full JWT, account scope, cache save time,
+server expiry, `fresh` status, decoded `header` and `payload`, and `claimTimes` with UTC dates for
+numeric `iat`, `nbf`, and `exp` claims. Nested payload data is preserved. Decoding does not verify the
+signature; `fresh` uses the same local expiry checks as `login`. A malformed JWT is listed with a
+`decodeError` so other entries can still be inspected. Use `--domain` and/or `--siteId` to filter.
+An empty cache prints `[]`. The command only reads from the worker and never signs in or renews tokens.
 
 ## How it works
 
