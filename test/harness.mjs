@@ -295,7 +295,9 @@ check('unsupported host returns null', api.routeHostFor('example.com') === null)
 check('registrable domain comm100dev.io', api.registrableDomain(HOST) === 'comm100dev.io');
 check('registrable domain comm100.io', api.registrableDomain('dash11.comm100.io') === 'comm100.io');
 check('isSupportedHost rejects lookalikes', api.isSupportedHost('evil-comm100.io.attacker.com') === false);
-check('isSupportedHost accepts the local dashboard', api.isSupportedHost('localhost') === true);
+for (const host of ['localhost', 'localhost:12050', '127.0.0.1', '127.0.0.1:34500', '[::1]', '[::1]:12050']) {
+  check(`isSupportedHost excludes ${host}`, api.isSupportedHost(host) === false);
+}
 check('isSupportedHost accepts staging', api.isSupportedHost('dash11.comm100staging.com') === true);
 
 // ------------------------------------------------------------ the dashboard list
@@ -627,6 +629,7 @@ check('renewed session is healthy again', (await cookies.sessionRemainingMs(`htt
 console.log('\n-- the token is checked before the request is sent --');
 check('a before-send-headers listener is registered', beforeSendHeaderListeners.length === 1, beforeSendHeaderListeners.length);
 
+currentTabUrl = `https://${HOST}/ui/${SITE_ID}/entry/`;
 const apiUrl = `https://${HOST}/api/global/siteActivity:active?siteId=${SITE_ID}`;
 const sendWithCookie = (value, tabId) => {
   for (const fn of beforeSendHeaderListeners) {
@@ -1283,6 +1286,36 @@ await dropSession();
 const dashboard = await call({ type: 'requestSession', url: `https://${HOST}/api/data` },
   { tab: { id: 501, url: currentTabUrl }, url: currentTabUrl, frameId: 0 });
 check('dashboard requests still restore a session automatically', dashboard.ok && Boolean(dashboard.jwt), dashboard);
+openTabs = [];
+
+console.log('\n-- localhost is not monitored --');
+await armAccount('SlowLogin1', 'localhost:34500');
+currentTabUrl = 'http://localhost:34500/ui/99999/entry/';
+openTabs = [{ id: 601, url: currentTabUrl }];
+beforeRequests = loginCalls;
+const localSender = { tab: { id: 601, url: currentTabUrl }, url: currentTabUrl, frameId: 0 };
+const localAuth = await call({ type: 'ensureAuth', domain: 'localhost:34500', siteId: '99999' }, localSender);
+const localRequest = await call({ type: 'requestSession', url: 'http://localhost:34500/api/data' }, localSender);
+for (const fn of navListeners) fn({ tabId: 601, frameId: 0, url: currentTabUrl });
+for (const fn of beforeSendHeaderListeners) fn({ tabId: 601, frameId: 0, url: 'http://localhost:34500/api/data', requestHeaders: [] });
+for (const fn of webRequestListeners) fn({ tabId: 601, frameId: 0, url: 'http://localhost:34500/api/data', statusCode: 401 });
+for (const fn of alarmListeners) fn({ name: 'comm100-keep-alive' });
+for (const fn of cookieChangeListeners) fn({ removed: true, cookie: { name: 'token_99999', domain: 'localhost' } });
+await sleepForCookieChecks();
+check('localhost authentication and request bridge are unsupported', localAuth.reason === 'unsupported-host' && !localRequest.ok);
+check('saved localhost accounts do not trigger automatic sign-in', loginCalls === beforeRequests);
+check('localhost does not publish header rewriting rules', !dynamicRules.some((rule) => rule.condition.urlFilter.includes('localhost')));
+check('remote API token rules exclude localhost initiators', dynamicRules.filter((rule) => rule.action.type === 'modifyHeaders')
+  .every((rule) => ['localhost', '127.0.0.1', '[::1]'].every((host) => rule.condition.excludedInitiatorDomains.includes(host))));
+await armAccount('SlowLogin1');
+await dropSession();
+beforeRequests = loginCalls;
+const localRemoteAuth = await call({ type: 'ensureAuth', domain: HOST, siteId: SITE_ID }, localSender);
+for (const fn of beforeSendHeaderListeners) fn({ tabId: 601, frameId: 0, url: `https://${HOST}/api/data`, requestHeaders: [] });
+for (const fn of webRequestListeners) fn({ tabId: 601, frameId: 0, url: `https://${HOST}/api/data`, statusCode: 401 });
+await sleepForCookieChecks();
+check('remote API calls from localhost do not restore remote sessions', !localRemoteAuth.ok && loginCalls === beforeRequests &&
+  !await chrome.cookies.get({ url: `https://${HOST}`, name: `token_${SITE_ID}` }));
 openTabs = [];
 
 console.log(`\n${failed === 0 ? 'ALL CHECKS PASSED' : `${failed} CHECK(S) FAILED`}${skipped ? ` (${skipped} skipped)` : ''}`);

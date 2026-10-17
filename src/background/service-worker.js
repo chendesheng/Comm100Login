@@ -178,7 +178,7 @@ async function requestSession(message, sender) {
   } catch {
     return { ok: false, reason: 'invalid-request' };
   }
-  if (sender.tab?.id == null || page.origin !== target.origin || !routeOriginFor(page.host) ||
+  if (sender.tab?.id == null || page.origin !== target.origin || !isSupportedHost(page.host) || !routeOriginFor(page.host) ||
       !/^\/ui(?:\/|$)/i.test(page.pathname) ||
       !target.pathname.startsWith('/api/') || /^\/api\/login\//i.test(target.pathname)) {
     return { ok: false, reason: 'unsupported-request' };
@@ -243,13 +243,16 @@ function resolveDomain(domain, url, host) {
 function isLoginPage(url) {
   try {
     const page = new URL(url);
-    return Boolean(routeOriginFor(page.host)) &&
+    return isSupportedHost(page.host) && Boolean(routeOriginFor(page.host)) &&
       (page.pathname === '/' || /^\/login(?:\/|$)/i.test(page.pathname));
   } catch { return false; }
 }
 
 function isDashboardPage(url) {
-  try { return /^\/ui(?:\/|$)/i.test(new URL(url).pathname); } catch { return false; }
+  try {
+    const page = new URL(url);
+    return isSupportedHost(page.host) && /^\/ui(?:\/|$)/i.test(page.pathname);
+  } catch { return false; }
 }
 
 async function automaticAuthBlocked({ url, tabId, host }) {
@@ -259,7 +262,8 @@ async function automaticAuthBlocked({ url, tabId, host }) {
   if (tabId != null && tabId >= 0) {
     try {
       const tab = await chrome.tabs.get(tabId);
-      return isLoginPage(tab.pendingUrl || tab.url);
+      const pageUrl = tab.pendingUrl || tab.url;
+      return !isSupportedHost(new URL(pageUrl).host) || isLoginPage(pageUrl);
     } catch { return true; }
   }
   // Keep-alive and cookie removal have no originating tab. Leave a dashboard alone when its
@@ -306,6 +310,7 @@ async function ensureAuth({
 }) {
   const targetHost = resolveDomain(domain, url, hostname || host);
   if (!targetHost) return { ok: false, reason: 'no-host' };
+  if (!isSupportedHost(targetHost)) return { ok: false, reason: 'unsupported-host' };
 
   const routeBase = routeOriginFor(targetHost);
   if (!routeBase) return { ok: false, reason: 'unsupported-host' };
@@ -973,6 +978,7 @@ async function replantRemovedToken(cookie) {
   const now = Date.now();
 
   for (const host of Object.keys(state.routes || {})) {
+    if (!isSupportedHost(host)) continue;
     if (registrableDomain(host) !== domain) continue;
     if (!routeMatchesSite(state.routes[host], siteId)) continue;
     if (store.isSuppressed(state, host)) continue;
@@ -1031,8 +1037,7 @@ const reauthHistory = new Map();
 const WATCHED_URLS = [
   'https://*.comm100dev.io/*',
   'https://*.comm100.io/*',
-  'https://*.comm100staging.com/*',
-  'http://localhost/*'
+  'https://*.comm100staging.com/*'
 ];
 
 function watchApiResponses() {
@@ -1356,7 +1361,8 @@ async function publishSessionHeader(host, jwt) {
         type: 'modifyHeaders',
         requestHeaders: [{ header: 'authorization', operation: 'set', value: `Bearer ${jwt}` }]
       },
-      condition: { urlFilter: `||${host}/api/`, resourceTypes: ['xmlhttprequest'] }
+      condition: { urlFilter: `||${host}/api/`, resourceTypes: ['xmlhttprequest'],
+        excludedInitiatorDomains: ['localhost', '127.0.0.1', '[::1]'] }
     }
   ];
   try {

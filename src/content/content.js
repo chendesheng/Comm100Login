@@ -9,8 +9,7 @@
   // matches decide this first; this is the belt to that pair of braces.
   const SUPPORTED_HOST = /(^|\.)(comm100dev\.io|comm100staging\.com|comm100\.io)$/i;
   const hostname = location.hostname;
-  const isLocalDashboard = hostname === 'localhost' || hostname === '127.0.0.1';
-  if (!SUPPORTED_HOST.test(hostname) && !isLocalDashboard) return;
+  if (!SUPPORTED_HOST.test(hostname)) return;
 
   /**
    * The credential scope — the host, port included. Credentials are saved per dashboard, so this

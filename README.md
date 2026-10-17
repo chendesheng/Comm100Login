@@ -298,6 +298,9 @@ of confusing branches. The route lookup only runs when the URL does not name a s
 
 ### Login pages stay manual
 
+The extension does not monitor localhost or loopback addresses: no request interception, credential
+capture, cookie restoration, or automatic sign-in. Existing local accounts remain available to the CLI.
+
 Opening `/`, `/login`, or `/login/` leaves the login form available, including URLs with a
 `retUrl` pointing to the dashboard. The extension does not sign in, cover the form, prefill it,
 or redirect away. Requests from login pages bypass JWT renewal, retries, and automatic
@@ -427,7 +430,7 @@ The popup no longer renders the log — **Export activity** in the popup footer 
 ```
 livechat6dash.testing.comm100dev.io  ->  livechat6route.testing.comm100dev.io
 *.comm100.io                         ->  route.comm100.io
-any other listed dashboard           ->  itself (staging, http://localhost:34500)
+any other listed dashboard           ->  itself (staging; localhost routing is CLI-only)
 anything else                        ->  not supported, nothing happens
 ```
 
@@ -674,6 +677,5 @@ The loop itself was diagnosed from the activity log of a real occurrence, not fr
 `401` → `sign-in -> ok` → `header-rule` → `401` on repeat, because the extension was signing in for
 the site *in the URL* and the panel rejected every call made with that token. `getByEmail` confirms
 the account has exactly one site there (`10010`), which is what the fixed code checks before it
-attempts anything. The `dash11.comm100staging.com` and `http://localhost:34500` entries are the local
-full-stack dashboards; their self-routing has **not** been exercised, only their appearance in the
-picker.
+attempts anything. The staging dashboard's self-routing has **not** been exercised. Localhost entries
+remain in the account metadata for CLI use; the extension does not monitor them.

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Comm100 Auto Login",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Silently signs in to Comm100 test dashboards with saved credentials, preferring the most recently used account.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -17,8 +17,7 @@
   "host_permissions": [
     "https://*.comm100dev.io/*",
     "https://*.comm100.io/*",
-    "https://*.comm100staging.com/*",
-    "http://localhost/*"
+    "https://*.comm100staging.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -29,8 +28,7 @@
       "matches": [
         "https://*.comm100dev.io/*",
         "https://*.comm100.io/*",
-        "https://*.comm100staging.com/*",
-        "http://localhost/*"
+        "https://*.comm100staging.com/*"
       ],
       "js": ["src/content/request-hook.js"],
       "world": "MAIN",
@@ -41,8 +39,7 @@
       "matches": [
         "https://*.comm100dev.io/*",
         "https://*.comm100.io/*",
-        "https://*.comm100staging.com/*",
-        "http://localhost/*"
+        "https://*.comm100staging.com/*"
       ],
       "js": [
         "src/content/content.js"

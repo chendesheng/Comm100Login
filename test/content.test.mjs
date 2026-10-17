@@ -57,3 +57,21 @@ for (const path of ['/', '/login', '/login/', '/login?retUrl=%2Fui%2F10008%2Fent
     assert.equal(page.messages.filter((message) => message.type === 'ensureAuth').length, 1);
   });
 }
+
+for (const host of ['localhost:12050', 'localhost:34500', '127.0.0.1:12050', '[::1]:12050']) {
+  test(`${host} does not start content monitoring or capture credentials`, async () => {
+    const page = setup(`http://${host}/ui/10008/entry/`);
+    await settle();
+    page.document.dispatchEvent(new Event('submit'));
+    page.history.pushState({}, '', '/login');
+    await settle();
+    assert.equal(page.messages.length, 0);
+    assert.equal(page.polls.length, 0);
+  });
+}
+
+test('manifest grants no access to localhost or loopback pages', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const patterns = [...manifest.host_permissions, ...manifest.content_scripts.flatMap((script) => script.matches)];
+  assert(patterns.every((pattern) => /^https:\/\/\*\.(comm100dev\.io|comm100staging\.com|comm100\.io)\/\*$/.test(pattern)));
+});

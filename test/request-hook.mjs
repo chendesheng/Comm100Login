@@ -199,3 +199,12 @@ console.log('PASS login pages bypass authentication and retries, including SPA r
   await pending;
   assert.equal(network[0].auth, null, 'a session reply arriving after navigation cannot inject a JWT');
 }
+
+for (const host of ['localhost:12050', 'localhost:34500', '127.0.0.1:12050', '[::1]:12050']) {
+  const { window, config, network } = setup(`http://${host}/ui/99999/entry/`);
+  await window.fetch('/api/echo', { headers: { Authorization: 'Bearer original' } });
+  await xhrCall(window, '/api/echo', 'Bearer original');
+  assert.equal(config.checks, 0);
+  assert(network.every((request) => request.auth === 'Bearer original'));
+}
+console.log('PASS localhost and loopback requests are left untouched');

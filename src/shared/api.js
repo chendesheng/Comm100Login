@@ -57,15 +57,14 @@ export function registrableDomain(host) {
   return parts.slice(-2).join('.');
 }
 
-/** True when the dashboard host serves the Comm100 login app. */
+/** True when the extension should monitor the dashboard host. */
 export function isSupportedHost(host) {
   const h = bareHost(host);
   if (!h) return false;
   if (h === 'comm100dev.io' || h.endsWith('.comm100dev.io')) return true;
   if (h === 'comm100.io' || h.endsWith('.comm100.io')) return true;
   if (h === 'comm100staging.com' || h.endsWith('.comm100staging.com')) return true;
-  // The local full-stack dashboard (`http://localhost:34500`) plus the loopback literals.
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+  return false;
 }
 
 /**
