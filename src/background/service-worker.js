@@ -3,7 +3,7 @@
  *
  * The happy path never touches the login page: resolve site -> get JWT -> exchange for the
  * session cookie -> the dashboard loads already authenticated. The only navigation is the one
- * the user asked for (a login-page bounce is redirected to its own `retUrl`).
+ * the user asked for. Login pages remain available for manual sign-in.
  */
 
 import {
@@ -105,6 +105,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     try {
       switch (type) {
+        case 'pageMode':
+          await updateLoginPageRule(sender.tab?.id, sender.url);
+          sendResponse({ ok: true });
+          break;
         case 'requestSession':
           sendResponse(await requestSession(message, sender));
           break;
@@ -113,7 +117,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await ensureAuth({
               ...message,
               tabId: message.tabId ?? sender.tab?.id ?? null,
-              url: message.url || sender.tab?.url || null
+              url: sender.url || message.url || sender.tab?.url || null
             })
           );
           break;
@@ -175,7 +179,7 @@ async function requestSession(message, sender) {
     return { ok: false, reason: 'invalid-request' };
   }
   if (sender.tab?.id == null || page.origin !== target.origin || !routeOriginFor(page.host) ||
-      !/^\/(?:ui(?:\/|$)|login\/?$|$)/i.test(page.pathname) ||
+      !/^\/ui(?:\/|$)/i.test(page.pathname) ||
       !target.pathname.startsWith('/api/') || /^\/api\/login\//i.test(target.pathname)) {
     return { ok: false, reason: 'unsupported-request' };
   }
@@ -235,6 +239,38 @@ function resolveDomain(domain, url, host) {
   );
 }
 
+/** Login pages (including their auxiliary routes) never initiate automatic authentication. */
+function isLoginPage(url) {
+  try {
+    const page = new URL(url);
+    return Boolean(routeOriginFor(page.host)) &&
+      (page.pathname === '/' || /^\/login(?:\/|$)/i.test(page.pathname));
+  } catch { return false; }
+}
+
+function isDashboardPage(url) {
+  try { return /^\/ui(?:\/|$)/i.test(new URL(url).pathname); } catch { return false; }
+}
+
+async function automaticAuthBlocked({ url, tabId, host }) {
+  if (isLoginPage(url)) return true;
+  // A navigation explicitly targeting /ui must be allowed while the old login document is open.
+  if (isDashboardPage(url)) return false;
+  if (tabId != null && tabId >= 0) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      return isLoginPage(tab.pendingUrl || tab.url);
+    } catch { return true; }
+  }
+  // Keep-alive and cookie removal have no originating tab. Leave a dashboard alone when its
+  // only open tabs are login pages, but retain renewal for other dashboards sharing the host.
+  const tabs = await chrome.tabs.query({});
+  const matching = tabs.filter((tab) => {
+    try { return new URL(tab.pendingUrl || tab.url).host.toLowerCase() === host; } catch { return false; }
+  });
+  return matching.length > 0 && matching.every((tab) => isLoginPage(tab.pendingUrl || tab.url));
+}
+
 // ---------------------------------------------------------------- ensureAuth
 
 /**
@@ -274,6 +310,12 @@ async function ensureAuth({
   const routeBase = routeOriginFor(targetHost);
   if (!routeBase) return { ok: false, reason: 'unsupported-host' };
 
+  // Keep dashboard admission synchronous so concurrent rejected requests reserve one renewal.
+  if (!userInitiated && (isLoginPage(url) ||
+      (!isDashboardPage(url) && await automaticAuthBlocked({ url, tabId, host: targetHost })))) {
+    return { ok: false, reason: 'manual-login-page' };
+  }
+
   const urlSiteId = siteId || siteIdFromUrl(url);
 
   const flightKey = `${targetHost}|${urlSiteId || ''}`;
@@ -285,7 +327,7 @@ async function ensureAuth({
     if (forceRefresh && rejectedToken && result.ok &&
         await tokenFor(targetHost, result.siteId) === rejectedToken) {
       return ensureAuth({ domain: targetHost, siteId: urlSiteId, tabId, force, userInitiated,
-        minRemainingMs, forceRefresh, rejectedToken, ignoreCooldown });
+        url, minRemainingMs, forceRefresh, rejectedToken, ignoreCooldown });
     }
     return result;
   }
@@ -1009,7 +1051,7 @@ function watchApiResponses() {
       if (!parsed.pathname.startsWith('/api/')) return;
       if (parsed.pathname.toLowerCase().startsWith('/api/login/')) return;
       if (guardedFrames.has(frameKey(details))) return;
-      handleAuthFailure(host, details.url).catch((err) => log('auth-failure handling failed', err));
+      handleAuthFailure(host, details.url, { tabId: details.tabId }).catch((err) => log('auth-failure handling failed', err));
     },
     { urls: WATCHED_URLS }
   );
@@ -1061,6 +1103,7 @@ function watchOutgoingRequests() {
       if (match && isJwtFresh(decodeURIComponent(match[2]), JWT_SKEW_MS)) return;
 
       handleAuthFailure(host, details.url, {
+        tabId: details.tabId,
         siteId: match ? match[1] : null
       }).catch((err) => log('pre-flight re-auth failed', err));
     },
@@ -1069,7 +1112,8 @@ function watchOutgoingRequests() {
   );
 }
 
-async function handleAuthFailure(host, url, { siteId = null } = {}) {
+async function handleAuthFailure(host, url, { siteId = null, tabId = null } = {}) {
+  if (await automaticAuthBlocked({ url, tabId, host })) return;
   const now = Date.now();
   const recent = (reauthHistory.get(host) || []).filter((at) => now - at < REAUTH_WINDOW_MS);
   reauthHistory.set(host, recent);
@@ -1103,6 +1147,7 @@ async function handleAuthFailure(host, url, { siteId = null } = {}) {
     hostname: host,
     domain: host,
     siteId: requested,
+    tabId,
     url,
     force: true,
     forceRefresh: true
@@ -1214,7 +1259,7 @@ async function recoverStaticRequest(details) {
  */
 function watchNavigations() {
   if (!chrome.webNavigation || !chrome.webNavigation.onBeforeNavigate) return;
-  chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+  const onNavigate = (details) => {
     if (details.frameId !== 0) return;
     let parsed;
     try {
@@ -1225,16 +1270,22 @@ function watchNavigations() {
     const host = parsed.host.toLowerCase();
     if (!isSupportedHost(host) || !routeOriginFor(host)) return;
 
+    updateLoginPageRule(details.tabId, details.url).catch((err) => log('login page rule failed', err));
+
     // Remember deliberate trips to the sign-in page so the cookie watchdog does not undo a
     // sign-out the user just performed through the control panel.
     if (parsed.pathname === '/' || /^\/login(\/|$)/i.test(parsed.pathname)) {
       recentLoginNav.set(host, Date.now());
+      return;
     }
 
     const siteId = siteIdFromUrl(details.url);
     if (!siteId) return;
+    if (!/^\/ui(?:\/|$)/i.test(parsed.pathname)) return;
     ensureAuth({ hostname: host, domain: host, siteId, tabId: details.tabId, url: details.url }).catch(() => {});
-  });
+  };
+  chrome.webNavigation.onBeforeNavigate.addListener(onNavigate);
+  chrome.webNavigation.onHistoryStateUpdated?.addListener(onNavigate);
 }
 
 // ---------------------------------------------------------------- request header rewriting
@@ -1258,6 +1309,23 @@ function watchNavigations() {
 const DNR_RULE_BASE = 90000;
 const ruleIds = new Map(); // host -> { set, allow }
 const publishedHeaders = new Map();
+
+// Session rules support tabIds; dynamic host rules cannot distinguish a login tab from /ui.
+const loginRuleUpdates = new Map();
+function updateLoginPageRule(tabId, url) {
+  if (tabId == null || tabId < 0) return Promise.resolve();
+  const id = 1000000 + tabId;
+  const task = (loginRuleUpdates.get(tabId) || Promise.resolve()).catch(() => {}).then(async () => {
+    const addRules = isLoginPage(url) ? [{ id, priority: 3, action: { type: 'allow' },
+      condition: { tabIds: [tabId], resourceTypes: ['xmlhttprequest'] } }] : [];
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id], addRules });
+  });
+  loginRuleUpdates.set(tabId, task);
+  task.finally(() => {
+    if (loginRuleUpdates.get(tabId) === task) loginRuleUpdates.delete(tabId);
+  }).catch(() => {});
+  return task;
+}
 
 function rulesFor(host) {
   let ids = ruleIds.get(host);

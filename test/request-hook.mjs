@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/content/request-hook.js', import.met
 const origin = 'https://livechat6dash.testing.comm100dev.io';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function setup() {
+function setup(path = '/ui/99999/entry/') {
   const network = [];
   const config = { jwt: 'fresh', delay: 10, checks: 0, renewals: 0 };
   const window = new EventTarget();
@@ -73,9 +73,10 @@ function setup() {
         ok: Boolean(config.jwt), jwt: config.jwt });
     }, config.delay);
   });
-  vm.runInNewContext(source, { window, location: { origin, href: `${origin}/ui/99999/entry/`, pathname: '/ui/99999/entry/' },
+  const location = new URL(path, origin);
+  vm.runInNewContext(source, { window, location,
     Request: PageRequest, Headers, URL, Event, ProgressEvent: Event, DOMException, setTimeout, clearTimeout });
-  return { window, network, config, PageRequest };
+  return { window, network, config, PageRequest, location };
 }
 
 function xhrCall(window, url, auth = 'Bearer expired') {
@@ -173,4 +174,28 @@ function xhrCall(window, url, auth = 'Bearer expired') {
   const fallback = await xhrCall(window, '/api/no-account', 'Bearer manual');
   assert.equal(fallback.data.auth, 'Bearer manual');
   console.log('PASS login endpoints and other origins bypass the hook; failed authentication preserves the original request');
+}
+
+for (const path of ['/', '/login', '/login/', '/login?retUrl=%2Fui%2F99999%2Fentry%2F']) {
+  const { window, config, location } = setup(path);
+  const response = await window.fetch('/api/always401', { headers: { Authorization: 'Bearer manual' } });
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).auth, 'Bearer manual');
+  assert.equal((await xhrCall(window, '/api/always401', 'Bearer manual')).data.auth, 'Bearer manual');
+  assert.equal(config.checks, 0, 'login requests must not ask the extension for a session or retry');
+  location.href = `${origin}/ui/99999/entry/`;
+  assert.equal((await (await window.fetch('/api/echo')).json()).auth, 'Bearer fresh');
+  const checks = config.checks;
+  location.href = `${origin}/login`;
+  assert.equal((await xhrCall(window, '/api/echo', null)).data.auth, null);
+  assert.equal(config.checks, checks, 'SPA transition to login stops interception');
+}
+console.log('PASS login pages bypass authentication and retries, including SPA route transitions');
+{
+  const { window, location, config, network } = setup();
+  config.delay = 30;
+  const pending = window.fetch('/api/echo');
+  location.href = `${origin}/login`;
+  await pending;
+  assert.equal(network[0].auth, null, 'a session reply arriving after navigation cannot inject a JWT');
 }

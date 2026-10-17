@@ -15,6 +15,7 @@
   let sequence = 0;
 
   function apiUrl(value) {
+    if (!/^\/ui(\/|$)/i.test(location.pathname)) return null;
     try {
       const url = new URL(value, location.href);
       return url.origin === location.origin && url.pathname.startsWith('/api/') &&
@@ -30,10 +31,11 @@
     if (!entry) return;
     clearTimeout(entry.timer);
     pending.delete(data.id);
-    entry.resolve(data.ok && typeof data.jwt === 'string' ? data.jwt : null);
+    entry.resolve(/^\/ui(\/|$)/i.test(location.pathname) && data.ok && typeof data.jwt === 'string' ? data.jwt : null);
   });
 
   function session(url, rejectedToken = null) {
+    if (!apiUrl(url)) return Promise.resolve(null);
     return new Promise((resolve) => {
       const id = `${Date.now()}-${++sequence}`;
       // Route lookup and JWT login each have a 20-second timeout in the worker.

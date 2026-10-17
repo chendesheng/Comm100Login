@@ -296,34 +296,17 @@ So the extension takes the site from the URL instead:
 With the site known, the route service is not consulted at all — one fewer round trip, and no chance
 of confusing branches. The route lookup only runs when the URL does not name a site.
 
-### Never showing the sign-in page
+### Login pages stay manual
 
-The control panel is a SPA that decides whether it is signed in only *after* loading its bundle.
-Three things keep the form off the screen:
+Opening `/`, `/login`, or `/login/` leaves the login form available, including URLs with a
+`retUrl` pointing to the dashboard. The extension does not sign in, cover the form, prefill it,
+or redirect away. Requests from login pages bypass JWT renewal, retries, and automatic
+Authorization header replacement. Manual form submissions still save entered credentials.
 
-1. **Keep-alive.** An alarm every 15 minutes renews any session with less than 30 minutes left
-   (the JWT lives ~2 h). In normal browsing the cookie is therefore always valid and the app never
-   considers routing to `/login` at all.
-2. **Replenish on deletion.** A `cookies.onChanged` listener puts `token_{siteId}` straight back
-   when it disappears — so deleting the cookie by hand is a non-event rather than a countdown to
-   the next bounce. A deliberate sign-out is respected: the worker ignores removals that follow a
-   trip to `/login`, and a `logout` message from the popup (no longer wired to a button, but still
-   handled) suppresses it entirely.
-3. **Start before the document.** `webNavigation.onBeforeNavigate` kicks off the sign-in as soon as
-   the navigation is known, and the cookie is planted the moment `jwtToken/login` returns —
-   `CrossPlatformLogin` is fire-and-forget, off the critical path. The control panel has to fetch and
-   parse its bundle before it checks, so this usually wins outright.
-4. **Watch the SPA's own routing.** The control panel can move to `/login` without loading a
-   document, so `pushState`/`replaceState`/`popstate` are watched too; otherwise a session that
-   vanishes mid-session leaves the sign-in page sitting there.
-5. **Cover the form** as a last resort. If the tab does land on `/login`, the content script first
-   asks a local-only pre-flight whether a sign-in is genuinely about to happen, and only then hides
-   `#login` behind a short "Signing in…" notice — removed the instant the attempt resolves, so a
-   refusal reveals the form and a success navigates away.
-
-The pre-flight deliberately mirrors *every* gate the real attempt applies (no account, suppressed
-after sign-out, still cooling down, site unresolvable). If it disagrees with
-the attempt, the form would be hidden for nothing — a worse flicker than the one being prevented.
+Automatic authentication starts on `/ui/...`, including SPA navigation from the login form.
+The keep-alive and cookie watchdog also leave a host alone when its only open tabs are login
+pages. Dashboard tabs on the same host can still renew their own sessions. An explicit popup
+**Login now** action and CLI login remain available.
 
 ### Acting as middleware on a rejected request
 
@@ -429,8 +412,7 @@ removed, because it was the one change capable of making Chrome or the server re
 ### Activity log
 
 The worker keeps a rolling log of what it decided and why — `cookie-removed`, `sign-in ->
-ok`/`-> bad-credentials`/`-> api-error`, `header-rule -> Authorization attached to …`, `401`, and `redirect: login page -> …`
-when the content script leaves `/login`.
+ok`/`-> bad-credentials`/`-> api-error`, `header-rule -> Authorization attached to …`, and `401`.
 
 It exists because "it still reloads" was being diagnosed by guesswork across several rounds. That log
 is what finally showed the truth: dozens of `/api/` calls returning 401 with **no interception
@@ -615,13 +597,10 @@ the file.
   left alone for you. Suspicious silences are shown in the popup, not just logged.
 - Repeated 401s cannot re-sign-in without bound: at most 3 in a rolling minute per dashboard, and the
   cap is not reset by its own successes (a loop where every sign-in "works" is the one that needs
-  bounding). Leaving the sign-in page is separately capped at 3 bounces per tab per minute, counted in
-  `sessionStorage` so it survives the navigation it is counting.
+  bounding).
 - Two-factor / forced-2FA accounts cannot be completed headlessly. The extension detects this,
-  does **not** count it as a credential failure, and pre-fills the form so you only type the code.
+  does **not** count it as a credential failure, and leaves manual sign-in available.
 - Auto-login stays out of the way on `/login/forgotpassword`, `/login/sso`, and reset/2FA links.
-- When a `/login` bounce sends you on, it follows the app's own `retUrl` if there is one; otherwise it
-  lands on the same `/ui/{siteId}/entry/?fromlogin=1` path the panel uses after a manual sign-in.
 
 ## Security
 
@@ -655,7 +634,7 @@ src/shared/platforms.js  the dashboard list credentials are scoped to
 src/shared/cookies.js    session cookie read / plant / clear
 src/shared/storage.js    chrome.storage.local schema + account lifecycle
 src/background/service-worker.js
-src/content/content.js   thin: trigger, redirect, capture, prefill fallback
+src/content/content.js   dashboard authentication bridge and manual credential capture
 src/popup/popup.html     account manager UI
 src/popup/popup.js
 src/popup/tailwind.input.css  Tailwind source (not loaded by the extension)

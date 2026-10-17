@@ -25,6 +25,9 @@ const tabReloads = [];
 const beforeSendHeaderListeners = [];
 const beforeRequestListeners = [];
 const dynamicRules = [];
+const sessionRules = [];
+let openTabs = [];
+const historyListeners = [];
 
 const cookieChangeListeners = [];
 const tabUpdates = [];
@@ -56,6 +59,7 @@ globalThis.chrome = {
   },
   webNavigation: {
     onBeforeNavigate: { addListener: (fn) => navListeners.push(fn) },
+    onHistoryStateUpdated: { addListener: (fn) => historyListeners.push(fn) },
     getFrame: async () => currentDocumentId ? ({ url: currentTabUrl, documentId: currentDocumentId }) : undefined
   },
   webRequest: {
@@ -64,12 +68,20 @@ globalThis.chrome = {
     onBeforeRequest: { addListener: (fn) => beforeRequestListeners.push(fn) }
   },
   tabs: {
+    query: async () => structuredClone(openTabs),
     get: async (tabId) => ({ id: tabId, url: currentTabUrl, pendingUrl: pendingTabUrl }),
     reload: async (tabId) => { tabReloads.push(tabId); },
     update: async (tabId, props) => { tabUpdates.push({ tabId, ...props }); },
     create: async (props) => { tabCreates.push({ ...props }); }
   },
   declarativeNetRequest: {
+    updateSessionRules: async ({ removeRuleIds = [], addRules = [] }) => {
+      for (const id of removeRuleIds) {
+        const at = sessionRules.findIndex((rule) => rule.id === id);
+        if (at >= 0) sessionRules.splice(at, 1);
+      }
+      sessionRules.push(...addRules);
+    },
     getDynamicRules: async () => dynamicRules.map((rule) => ({ id: rule.id })),
     updateDynamicRules: async ({ removeRuleIds = [], addRules = [] } = {}) => {
       for (const id of removeRuleIds) {
@@ -1230,6 +1242,48 @@ const afterRejection = await call({ type: 'ensureAuth', domain: HOST, siteId: SI
   force: true, forceRefresh: true, rejectedToken: sharedJwt });
 check('a server-rejected JWT is not restored from the shared cache', afterRejection.ok && loginCalls === beforeRequests + 1, afterRejection);
 check('browser credential login updates the shared cache', (await storage.getState()).tokens.some((token) => token.jwtToken === 'stub.slow.token'));
+
+console.log('\n-- login pages remain manual --');
+await armAccount('SlowLogin1');
+await dropSession();
+for (const path of ['/', '/login', '/login/', `/login?retUrl=${encodeURIComponent(`https://${HOST}/ui/${SITE_ID}/entry/`)}`]) {
+  currentTabUrl = `https://${HOST}${path}`;
+  openTabs = [{ id: 501, url: currentTabUrl }];
+  const sender = { tab: { id: 501, url: currentTabUrl }, url: currentTabUrl, frameId: 0 };
+  beforeRequests = loginCalls;
+  const automatic = await call({ type: 'ensureAuth', domain: HOST, siteId: SITE_ID }, sender);
+  const intercepted = await call({ type: 'requestSession', url: `https://${HOST}/api/data` }, sender);
+  for (const fn of navListeners) fn({ tabId: 501, frameId: 0, url: currentTabUrl });
+  for (const fn of beforeSendHeaderListeners) fn({ tabId: 501, frameId: 0, url: `https://${HOST}/api/data`, requestHeaders: [] });
+  for (const fn of webRequestListeners) fn({ tabId: 501, frameId: 0, url: `https://${HOST}/api/data`, statusCode: 401 });
+  for (const fn of alarmListeners) fn({ name: 'comm100-keep-alive' });
+  await sleepForCookieChecks();
+  check(`${path}: navigation, API requests and alarm do not sign in`,
+    !automatic.ok && !intercepted.ok && loginCalls === beforeRequests &&
+    !await chrome.cookies.get({ url: `https://${HOST}`, name: `token_${SITE_ID}` }));
+  check('login tab is exempt from automatic Authorization rewriting', sessionRules.some((rule) =>
+    rule.priority > 2 && rule.action.type === 'allow' && rule.condition.tabIds.includes(501)));
+}
+// The five-second sign-out guard must not be the only thing preventing cookie restoration.
+const originalNow = Date.now;
+Date.now = () => originalNow() + 10000;
+beforeRequests = loginCalls;
+for (const fn of cookieChangeListeners) fn({ removed: true, cookie: { name: `token_${SITE_ID}`, domain: COOKIE_DOMAIN } });
+await sleepForCookieChecks();
+Date.now = originalNow;
+check('cookie watchdog leaves an open login page manual after the sign-out guard expires', loginCalls === beforeRequests);
+const explicit = await call({ type: 'ensureAuth', domain: HOST, siteId: SITE_ID, userInitiated: true, force: true },
+  { tab: { id: 501, url: currentTabUrl }, url: currentTabUrl });
+check('explicit popup login still works from the login page', explicit.ok, explicit);
+currentTabUrl = `https://${HOST}/ui/${SITE_ID}/entry/`;
+for (const fn of historyListeners) fn({ tabId: 501, frameId: 0, url: currentTabUrl });
+await sleepForCookieChecks();
+check('SPA navigation back to the dashboard removes the login exemption', !sessionRules.some((rule) => rule.condition.tabIds.includes(501)));
+await dropSession();
+const dashboard = await call({ type: 'requestSession', url: `https://${HOST}/api/data` },
+  { tab: { id: 501, url: currentTabUrl }, url: currentTabUrl, frameId: 0 });
+check('dashboard requests still restore a session automatically', dashboard.ok && Boolean(dashboard.jwt), dashboard);
+openTabs = [];
 
 console.log(`\n${failed === 0 ? 'ALL CHECKS PASSED' : `${failed} CHECK(S) FAILED`}${skipped ? ` (${skipped} skipped)` : ''}`);
 process.exit(failed === 0 ? 0 : 1);
