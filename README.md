@@ -151,8 +151,9 @@ ordered by capture time. The SQLite database is `traces.sqlite` in the CLI confi
 directly, works while Chrome is closed, and prints nothing on stdout once the bridge is configured
 but no rows have been captured, and fails with the setup instruction when the bridge has never been
 configured. `--domain` keeps only rows whose request host matches (scheme and path are ignored, like
-the account filters), `--siteId` keeps rows carrying that `siteId` query value, and `--from` sets an
-inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration counted back from
+the account filters), `--siteId` keeps rows carrying that `siteId` query value, `--method` keeps the
+listed HTTP methods (case-insensitive, comma separated for several), and `--from` sets an inclusive
+lower bound on the capture time: an ISO-8601 timestamp, or a duration counted back from
 now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>` prints that one
 exchange the way it looked on the wire: request line, `Host`, request headers and body, then the
 response status line, response headers and body. On a terminal that view is colored: method, version,

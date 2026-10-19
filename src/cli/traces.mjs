@@ -168,9 +168,19 @@ export async function openTraceWriter() {
   }
 }
 
+/** `--method` takes one method or several separated by commas; the rows store uppercase names. */
+function parseMethods(method) {
+  if (method === undefined || method === FILTER_ANY) return null;
+  const values = (Array.isArray(method) ? method : String(method).split(','))
+    .map((value) => String(value).trim().toUpperCase())
+    .filter(Boolean);
+  return values.length ? new Set(values) : null;
+}
+
 /** The trace-side counterpart of `filterAccounts`: a dashboard is the URL host, a site is a query value. */
-function keepsTrace(row, { domain, siteId, from }) {
+function keepsTrace(row, { domain, siteId, methods, from }) {
   if (from !== undefined && !(row.time >= from)) return false;
+  if (methods && !methods.has(row.method)) return false;
   if (domain === FILTER_ANY && siteId === FILTER_ANY) return true;
   let url;
   try {
@@ -237,7 +247,8 @@ function parseHeaders(value) {
   }
 }
 
-export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, from } = {}) {
+export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, method = FILTER_ANY, from } = {}) {
+  const methods = parseMethods(method);
   const path = traceDatabasePath();
   try {
     await stat(path);
@@ -252,7 +263,7 @@ export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, fro
     db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;');
     const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
     statement = db.prepare(listQuery(columns));
-    return statement.all().filter((row) => keepsTrace(row, { domain, siteId, from }));
+    return statement.all().filter((row) => keepsTrace(row, { domain, siteId, methods, from }));
   } catch (error) {
     if (String(error?.message).includes('no such table: traces')) return [];
     throw error;

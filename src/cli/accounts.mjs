@@ -21,7 +21,7 @@ const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
   comm100-accounts login <email_or_agent_id> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
-  comm100-accounts traces [--domain=HOST] [--siteId=ID] [--from=TIMESTAMP_OR_DURATION]
+  comm100-accounts traces [--domain=HOST] [--siteId=ID] [--method=METHOD[,METHOD]] [--from=TIMESTAMP_OR_DURATION]
   comm100-accounts traces <id> [--curl | --req-body]
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
@@ -31,8 +31,9 @@ list   Print siteId (12 columns), email (30 columns), and domain, ordered by dom
 login  Print a valid cached JWT, or sign in once and save the new JWT. The account is selected by
        email or by the agent id its dashboard tokens carry.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
-traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first; --domain, --siteId
-       and --from (ISO-8601, or a duration back from now such as 30m or 24h) narrow the rows.
+traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first; --domain, --siteId,
+       --method (one or more, comma separated) and --from (ISO-8601, or a duration back from now such
+       as 30m or 24h) narrow the rows.
        "traces <id>" prints that exchange's request and response as raw HTTP; --req-body prints only
        the request body, and --curl prints a curl command that replays it with fresh credentials
        from comm100-accounts login and the body from --req-body.
@@ -265,7 +266,7 @@ export function resolveFrom(value, now = Date.now()) {
 export async function run(args, { stdout = process.stdout, request = requestBridge } = {}) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
-    from: { type: 'string' },
+    from: { type: 'string' }, method: { type: 'string' },
     profile: { type: 'string' },
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     curl: { type: 'boolean' }, 'req-body': { type: 'boolean' }
@@ -283,6 +284,10 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   if (values.curl && command !== 'traces') throw new Error('--curl is only supported by traces.');
   if (values['req-body'] && command !== 'traces') throw new Error('--req-body is only supported by traces.');
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
+  if (values.method !== undefined && command !== 'traces') throw new Error('--method is only supported by traces.');
+  if (values.method !== undefined && !/^[A-Za-z]+(?:\s*,\s*[A-Za-z]+)*$/.test(values.method)) {
+    throw new Error('--method requires HTTP methods such as GET or POST, separated by commas.');
+  }
   if (command === 'extension-path') {
     if (Object.keys(values).length) throw new Error('extension-path does not accept account or profile options.');
     stdout.write(extensionPath() + '\n');
@@ -300,8 +305,9 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     if (values.curl && values['req-body']) throw new Error('--curl and --req-body print different things; choose one.');
     if (argument !== undefined) {
       if (!/^[1-9]\d*$/.test(argument)) throw new Error('Trace id must be a positive integer.');
-      if (values.domain !== undefined || values.siteId !== undefined || values.from !== undefined) {
-        throw new Error('traces <id> prints one exchange and does not accept --domain, --siteId or --from.');
+      if (values.domain !== undefined || values.siteId !== undefined || values.from !== undefined ||
+          values.method !== undefined) {
+        throw new Error('traces <id> prints one exchange and does not accept --domain, --siteId, --method or --from.');
       }
       const trace = await readTrace(Number(argument));
       if (!trace) throw new Error(`No trace with id ${argument}.`);
@@ -314,7 +320,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
       return;
     }
     const from = values.from === undefined ? undefined : resolveFrom(values.from);
-    const rows = await listTraces({ domain: values.domain, siteId: values.siteId, from });
+    const rows = await listTraces({ domain: values.domain, siteId: values.siteId, method: values.method, from });
     if (rows.length) {
       const header = `${'ID'.padEnd(4)} ${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
       const lines = rows.map((row) =>

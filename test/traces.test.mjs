@@ -173,6 +173,32 @@ test('the traces command prints no experimental sqlite warning', async (t) => {
   assert.equal(stderr, '');
 });
 
+test('trace filters narrow by HTTP method', async (t) => {
+  await useTraceDatabase(t);
+  const writer = await openTraceWriter();
+  for (const [method, url, time] of [
+    ['GET', 'https://a.test/api/get', 300],
+    ['POST', 'https://a.test/api/post', 200],
+    ['DELETE', 'https://a.test/api/delete?siteId=10010', 100]
+  ]) {
+    writer.insert({ method, url, time, statusCode: 200,
+      requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  }
+  writer.close();
+
+  // The method compares case-insensitively against the stored uppercase value.
+  assert.deepEqual((await listTraces({ method: 'post' })).map((row) => row.method), ['POST']);
+  assert.deepEqual((await listTraces({ method: 'GET' })).map((row) => row.time), [300]);
+  assert.deepEqual((await listTraces({ method: 'delete', siteId: 10010 })).map((row) => row.url),
+    ['https://a.test/api/delete?siteId=10010']);
+  assert.deepEqual(await listTraces({ method: 'PATCH' }), []);
+  // A comma-separated list keeps any of the named methods, in the rows' own newest-first order.
+  assert.deepEqual((await listTraces({ method: 'GET, DELETE' })).map((row) => row.method), ['GET', 'DELETE']);
+  assert.deepEqual((await listTraces({ method: 'post,get' })).map((row) => row.method), ['GET', 'POST']);
+  assert.deepEqual((await listTraces({ method: ['GET', 'POST', 'DELETE'] })).map((row) => row.time), [300, 200, 100]);
+  assert.deepEqual(await listTraces({ method: 'PUT, PATCH' }), []);
+});
+
 test('missing trace databases list as empty', async (t) => {
   await useTraceDatabase(t);
   assert.deepEqual(await listTraces(), []);

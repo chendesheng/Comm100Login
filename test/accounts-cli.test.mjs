@@ -551,6 +551,19 @@ test('traces filters rows by --domain, --siteId and --from', async (t) => {
   await run(['traces', '--from=2027-01-01T00:00:00Z'], empty);
   assert.equal(empty.text(), '');
 
+  const gets = capture();
+  await run(['traces', '--method=get'], gets);
+  assert.equal(gets.text().trimEnd().split('\n').length, 4); // header plus the three rows
+  const posts = capture();
+  await run(['traces', '--method=POST'], posts);
+  assert.equal(posts.text(), '');
+  const mixed = capture();
+  await run(['traces', '--method=GET,POST'], mixed);
+  assert.equal(mixed.text().trimEnd().split('\n').length, 4);
+  await assert.rejects(run(['traces', '--method=GET,,POST'], capture()), /separated by commas/);
+  await assert.rejects(run(['traces', '--method=g3t'], capture()), /--method requires HTTP methods/);
+  await assert.rejects(run(['list', '--method=get'], capture()), /--method is only supported by traces/);
+
   for (const args of [['list', '--from=2026-10-19T12:00:00Z'], ['tokens', '--from=2026-10-19T12:00:00Z'],
     ['login', 'a@example.com', '--from=2026-10-19T12:00:00Z']]) {
     await assert.rejects(run(args, capture()), /--from is only supported by traces/);
@@ -701,7 +714,7 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
 
   // An id selects exactly one row, so filters and extra arguments are refused rather than ignored.
   for (const args of [['traces', '0'], ['traces', 'abc'], ['traces', '1', '2'],
-    ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h']]) {
+    ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h'], ['traces', '1', '--method=GET']]) {
     await assert.rejects(run(args, capture()), /positive integer|does not accept|Use "list"/);
   }
 });
