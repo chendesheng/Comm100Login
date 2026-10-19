@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { ClassicLevel } from 'classic-level';
 import { dashboardOriginFor, getByEmail, jwtLogin, needsSecondFactor, normalizeSite, routeOriginFor } from '../shared/api.js';
-import { expirySecondsFor, tokenCookieName, tokenExpireCookieName } from '../shared/cookies.js';
+import { agentIdFromToken, expirySecondsFor, tokenCookieName, tokenExpireCookieName } from '../shared/cookies.js';
 import { compareAccountOrder, effectivePassword, filterAccounts, normalizeDomain, normalizeState } from '../shared/storage.js';
 
 import { cachedToken, tokenIsFresh } from '../shared/tokens.js';
@@ -19,7 +19,7 @@ export { tokenIsFresh } from '../shared/tokens.js';
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
-  comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
+  comm100-accounts login <email_or_agent_id> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
   comm100-accounts traces [--domain=HOST] [--siteId=ID] [--from=TIMESTAMP_OR_DURATION]
   comm100-accounts traces <id> [--curl]
@@ -28,7 +28,8 @@ const help = `Usage:
 
 list   Print siteId (12 columns), email (30 columns), and domain, ordered by domain, site id,
        then email, with optional filters.
-login  Print a valid cached JWT, or sign in once and save the new JWT.
+login  Print a valid cached JWT, or sign in once and save the new JWT. The account is selected by
+       email or by the agent id its dashboard tokens carry.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
 traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first; --domain, --siteId
        and --from (ISO-8601, or a duration back from now such as 30m or 24h) narrow the rows.
@@ -140,14 +141,28 @@ function tokenDetails(record, now) {
       details.decodeError = [details.decodeError, `Cannot decode JWT ${name} as a JSON object.`].filter(Boolean).join(' ');
     }
   }
+  details.agentId = record.agentId || (typeof details.payload?.agentId === 'string' ? details.payload.agentId : null);
   details.claimTimes = Object.fromEntries(['iat', 'nbf', 'exp']
     .filter((name) => typeof details.payload?.[name] === 'number')
     .map((name) => [name, isoTime(details.payload[name] * 1000)]));
   return details;
 }
 
-function selectAccount(state, email, options) {
-  let matches = state.accounts.filter((account) => account.email?.toLowerCase() === email.toLowerCase());
+function selectAccount(state, identifier, options) {
+  const wanted = String(identifier || '').trim().toLowerCase();
+  let matches = state.accounts.filter((account) => account.email?.toLowerCase() === wanted);
+  if (!matches.length) {
+    /** Login accepts the agent id a dashboard token carries, not only the address that was typed. */
+    matches = state.accounts.filter((account) => account.agentId && String(account.agentId).toLowerCase() === wanted);
+    if (!matches.length) {
+      // A token names its agent before a login has had the chance to store the id on the account.
+      const accountIds = new Set(state.tokens
+        .filter((token) => agentIdFromToken(token.jwtToken)?.toLowerCase() === wanted)
+        .map((token) => token.accountId));
+      matches = state.accounts.filter((account) => accountIds.has(account.id));
+    }
+  }
+  if (!matches.length) throw new Error(`No saved account matches ${identifier} as an email or agent id for the selected domain/site.`);
   if (options.domain) {
     const exact = matches.filter((account) => normalizeDomain(account.domain) === normalizeDomain(options.domain));
     matches = exact.length ? exact : matches.filter((account) => !account.domain);
@@ -156,7 +171,7 @@ function selectAccount(state, email, options) {
     const exact = matches.filter((account) => String(account.siteId) === options.siteId);
     matches = exact.length ? exact : matches.filter((account) => !account.siteId);
   }
-  if (!matches.length) throw new Error(`No saved account matches ${email} and the selected domain/site.`);
+  if (!matches.length) throw new Error(`No saved account matches ${identifier} with the selected domain/site.`);
   let domain = options.domain;
   const sites = () => new Set(matches.map((account) => account.siteId ? String(account.siteId) : null));
   const domains = new Set(matches.map((account) => normalizeDomain(account.domain)));
@@ -164,11 +179,11 @@ function selectAccount(state, email, options) {
     domain = defaultDomain();
     const exact = matches.filter((account) => normalizeDomain(account.domain) === domain);
     matches = exact.length ? exact : matches.filter((account) => !account.domain);
-    if (!matches.length) throw new Error(`No saved account matches ${email} on ${domain}. Pass --domain to select another dashboard.`);
+    if (!matches.length) throw new Error(`No saved account matches ${identifier} on ${domain}. Pass --domain to select another dashboard.`);
   }
   if (sites().size > 1) {
     const scopes = matches.map((a) => `${a.domain || 'unscoped'} / site ${a.siteId || 'unknown'}`).join(', ');
-    throw new Error(`Multiple accounts match ${email}: ${scopes}. Select one with --domain and --siteId.`);
+    throw new Error(`Multiple accounts match ${identifier}: ${scopes}. Select one with --domain and --siteId.`);
   }
   matches.sort((a, b) => (b.lastUsedAt || b.createdAt || 0) - (a.lastUsedAt || a.createdAt || 0));
   return { account: matches[0], domain };
@@ -201,8 +216,8 @@ function loginOutput(record, options) {
   return `${tokenCookieName(record.siteId)}=${record.jwtToken};${tokenExpireCookieName(record.siteId)}=${encodeURIComponent(expireTime)};siteList=${record.siteId}`;
 }
 
-export async function login(state, email, options, request = requestBridge) {
-  const selected = selectAccount(state, email, options);
+export async function login(state, identifier, options, request = requestBridge) {
+  const selected = selectAccount(state, identifier, options);
   const account = selected.account;
   const domain = normalizeDomain(account.domain || selected.domain);
   if (!domain) throw new Error('This account has no dashboard recorded. Specify --domain.');
@@ -259,7 +274,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   const limits = { login: 2, traces: 2 }[command] || 1;
   if (!['list', 'login', 'tokens', 'traces', 'setup', 'extension-path'].includes(command) ||
       positionals.length > limits || positionals.length < (command === 'login' ? 2 : 1)) {
-    throw new Error('Use "list", "login <email>", "tokens", "traces [id]", "setup", or "extension-path". See --help.');
+    throw new Error('Use "list", "login <email_or_agent_id>", "tokens", "traces [id]", "setup", or "extension-path". See --help.');
   }
   if (values['show-password'] && command !== 'list') throw new Error('--show-password is only supported by list.');
   if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');

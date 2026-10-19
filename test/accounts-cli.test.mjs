@@ -33,8 +33,8 @@ const account = (email, domain = host, siteId = '10001', extra = {}) => ({
   password: 'saved-test-password', lastUsedAt: 1, ...extra
 });
 const state = (accounts) => normalizeState({ accounts });
-const jwt = (exp = Math.floor(Date.now() / 1000) + 3600, serial = 1) =>
-  `h.${Buffer.from(JSON.stringify({ exp, serial })).toString('base64url')}.s`;
+const jwt = (exp = Math.floor(Date.now() / 1000) + 3600, serial = 1, extra = {}) =>
+  `h.${Buffer.from(JSON.stringify({ exp, serial, ...extra })).toString('base64url')}.s`;
 
 async function fixture(t, accounts) {
   const previousChrome = globalThis.chrome;
@@ -191,6 +191,46 @@ test('login saves a JWT through the worker and reuses it without another network
   assert(!JSON.stringify(saved).includes('saved-test-password'));
   assert.deepEqual(await readdir(f.directory), ['database']);
 
+});
+
+test('login accepts the agent id from a token and stores it next to the email', async (t) => {
+  const agentId = '08edd2e8-350a-43a8-a531-b2252044cbe0';
+  const f = await fixture(t, [account('id@example.com')]);
+  const token = jwt(undefined, 1, { agentId });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ errorCode: 0, jwtToken: token }));
+
+  const first = capture();
+  await run(['login', 'id@example.com', '--db', f.location], first);
+  assert.equal(first.text(), token + '\n');
+  const saved = await storage.getState();
+  assert.equal(saved.accounts[0].agentId, agentId);
+  assert.equal(saved.tokens[0].agentId, agentId);
+
+  // The same account, named by its id: the cache answers and no second sign-in is attempted.
+  const calls = globalThis.fetch.mock.callCount();
+  const byId = capture();
+  await run(['login', agentId, '--db', f.location], byId);
+  assert.equal(byId.text(), token + '\n');
+  assert.equal(globalThis.fetch.mock.callCount(), calls);
+
+  const listed = capture();
+  await run(['tokens', '--db', f.location], listed);
+  assert.equal(JSON.parse(listed.text())[0].agentId, agentId);
+});
+
+test('an agent id in the token cache selects its account before a login has saved the id', async (t) => {
+  const agentId = '08edd2e8-350a-43a8-a531-b2252044cbe0';
+  const accounts = [account('cache@example.com')];
+  const f = await fixture(t, accounts);
+  // A cache written by an older version: the token names the agent, the account record does not.
+  currentStore.value = normalizeState({
+    accounts,
+    tokens: [{ accountId: accounts[0].id, email: accounts[0].email, domain: host, siteId: '10001',
+      jwtToken: jwt(undefined, 1, { agentId }), savedAt: Date.now() }]
+  });
+  const output = capture();
+  await run(['login', agentId, '--db', f.location], output);
+  assert.equal(output.text(), jwt(undefined, 1, { agentId }) + '\n');
 });
 
 test('login --cookie prints curl -b cookies with the server expiry, including from cache', async (t) => {

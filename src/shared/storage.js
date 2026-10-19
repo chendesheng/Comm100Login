@@ -14,6 +14,8 @@
  * the account lockout threshold.
  */
 
+import { agentIdFromToken } from './cookies.js';
+
 const KEY = 'comm100AutoLogin';
 
 export const STORAGE_DEFAULTS = Object.freeze({
@@ -139,10 +141,13 @@ export const saveToken = (record) => mutate((state) => {
   }
   const token = {
     accountId: account.id, email: account.email, domain, siteId,
+    agentId: agentIdFromToken(record.jwtToken) || account.agentId || null,
     jwtToken: record.jwtToken, expireTime: record.expireTime || null, savedAt: Date.now()
   };
   account.domain ||= domain;
   account.siteId ||= siteId;
+  // The token names the agent, so the account keeps its id next to the email that was typed.
+  if (token.agentId) account.agentId = token.agentId;
   state.tokens = state.tokens.filter((entry) => !(entry.accountId === account.id &&
     entry.domain === domain && String(entry.siteId) === siteId));
   state.tokens.push(token);

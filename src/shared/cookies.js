@@ -19,18 +19,30 @@ export const TOKEN_EXPIRE_RE = /^tokenExpire_\d+$/;
 export const tokenCookieName = (siteId) => `token_${siteId}`;
 export const tokenExpireCookieName = (siteId) => `tokenExpire_${siteId}`;
 
-/** Reads the `exp` claim (seconds since epoch) out of a JWT, or null. */
-export function jwtExpirySeconds(jwtToken) {
+/** Decodes a JWT payload, or null when the token is malformed. */
+export function jwtPayload(jwtToken) {
   try {
     const payload = String(jwtToken).split('.')[1];
     if (!payload) return null;
     const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
     const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-    const exp = JSON.parse(atob(padded)).exp;
-    return Number.isFinite(exp) ? Number(exp) : null;
+    const value = JSON.parse(atob(padded));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   } catch {
     return null;
   }
+}
+
+/** Reads the `exp` claim (seconds since epoch) out of a JWT, or null. */
+export function jwtExpirySeconds(jwtToken) {
+  const exp = jwtPayload(jwtToken)?.exp;
+  return Number.isFinite(exp) ? Number(exp) : null;
+}
+
+/** Comm100 stamps the signed-in agent's id into every dashboard token; it names the account. */
+export function agentIdFromToken(jwtToken) {
+  const agentId = jwtPayload(jwtToken)?.agentId;
+  return typeof agentId === 'string' && agentId.trim() ? agentId.trim() : null;
 }
 
 /** Seconds-since-epoch when the session ends, preferring the server's `expireTime`. */
