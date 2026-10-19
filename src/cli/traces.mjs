@@ -2,6 +2,7 @@ import { chmod, mkdir, stat } from 'node:fs/promises';
 import { platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { bridgeConfigDirectory } from './bridge.mjs';
+import { FILTER_ANY, normalizeDomain, normalizeSiteId } from '../shared/storage.js';
 
 export const TRACE_LIMIT = 1000;
 
@@ -138,7 +139,29 @@ export async function openTraceWriter() {
   }
 }
 
-export async function listTraces() {
+/** The trace-side counterpart of `filterAccounts`: a dashboard is the URL host, a site is a query value. */
+function keepsTrace(row, { domain, siteId, from }) {
+  if (from !== undefined && !(row.time >= from)) return false;
+  if (domain === FILTER_ANY && siteId === FILTER_ANY) return true;
+  let url;
+  try {
+    url = new URL(row.url);
+  } catch {
+    return false;
+  }
+  if (domain !== FILTER_ANY && normalizeDomain(url.host) !== normalizeDomain(domain)) return false;
+  if (siteId !== FILTER_ANY) {
+    const wanted = normalizeSiteId(siteId);
+    let found = false;
+    for (const [name, value] of url.searchParams) {
+      if (name.toLowerCase() === 'siteid' && normalizeSiteId(value) === wanted) { found = true; break; }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
+export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, from } = {}) {
   const path = traceDatabasePath();
   try {
     await stat(path);
@@ -153,7 +176,7 @@ export async function listTraces() {
     db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;');
     const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
     statement = db.prepare(columns.includes('time') ? LIST : LEGACY_LIST);
-    return statement.all();
+    return statement.all().filter((row) => keepsTrace(row, { domain, siteId, from }));
   } catch (error) {
     if (String(error?.message).includes('no such table: traces')) return [];
     throw error;

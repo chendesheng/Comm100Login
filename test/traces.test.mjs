@@ -111,6 +111,36 @@ test('SQLite traces store headers and bodies verbatim without truncation', async
   }
 });
 
+test('trace filters narrow by dashboard, site id and start time', async (t) => {
+  await useTraceDatabase(t);
+  const writer = await openTraceWriter();
+  for (const [url, time] of [
+    ['https://a.test/api/x?siteId=10001', 300],
+    ['https://a.test/api/y?siteId=10002', 200],
+    ['https://b.test/api/z?siteId=10001', 100],
+    ['https://a.test/api/plain', 400]
+  ]) {
+    writer.insert({ url, time, method: 'GET', statusCode: 200,
+      requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  }
+  writer.close();
+
+  // Newest first throughout; a dashboard filter ignores scheme and path, like the account filters.
+  assert.deepEqual((await listTraces({ domain: 'a.test' })).map((row) => row.url), [
+    'https://a.test/api/plain', 'https://a.test/api/x?siteId=10001', 'https://a.test/api/y?siteId=10002'
+  ]);
+  assert.deepEqual((await listTraces({ domain: 'https://A.TEST/ui/10001/' })).map((row) => row.time),
+    [400, 300, 200]);
+  assert.deepEqual((await listTraces({ siteId: '10001' })).map((row) => row.url), [
+    'https://a.test/api/x?siteId=10001', 'https://b.test/api/z?siteId=10001'
+  ]);
+  assert.deepEqual((await listTraces({ siteId: 10002 })).map((row) => row.time), [200]);
+  // --from is inclusive, so a row exactly at the bound stays.
+  assert.deepEqual((await listTraces({ from: 300 })).map((row) => row.time), [400, 300]);
+  assert.deepEqual((await listTraces({ domain: 'a.test', siteId: '10002' })).map((row) => row.time), [200]);
+  assert.deepEqual(await listTraces({ domain: 'a.test', siteId: '10002', from: 201 }), []);
+});
+
 test('missing trace databases list as empty', async (t) => {
   await useTraceDatabase(t);
   assert.deepEqual(await listTraces(), []);

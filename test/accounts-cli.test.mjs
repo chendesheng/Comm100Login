@@ -482,6 +482,43 @@ test('traces prints the capture time first and dates unknown rows with a dash', 
   ].join('\n') + '\n');
 });
 
+test('traces filters rows by --domain, --siteId and --from', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-filter-'));
+  const previous = process.env.COMM100_TRACES_DB;
+  process.env.COMM100_TRACES_DB = join(directory, 'traces.sqlite');
+  t.after(async () => {
+    if (previous === undefined) delete process.env.COMM100_TRACES_DB;
+    else process.env.COMM100_TRACES_DB = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const writer = await openTraceWriter();
+  const insert = (url, time) => writer.insert({ url, time, method: 'GET', statusCode: 200,
+    requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  insert('https://a.test/api/x?siteId=10001', Date.parse('2026-10-19T12:00:00Z'));
+  insert('https://a.test/api/y?siteId=10002', Date.parse('2026-10-19T13:00:00Z'));
+  insert('https://b.test/api/z?siteId=10001', Date.parse('2026-10-19T14:00:00Z'));
+  writer.close();
+
+  const header = `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
+  const row = (time, url) => `${time.padEnd(24)} ${'GET'.padEnd(7)} ${'200'.padEnd(7)} ${url}`;
+  const output = capture();
+  await run(['traces', '--domain=a.test', '--siteId=10001', '--from=2026-10-19T11:00:00Z'], output);
+  assert.equal(output.text(), [header, row('2026-10-19T12:00:00.000Z', 'https://a.test/api/x?siteId=10001')].join('\n') + '\n');
+
+  // A filter that matches nothing stays silent: the bridge is configured, so there is nothing to report.
+  const empty = capture();
+  await run(['traces', '--from=2027-01-01T00:00:00Z'], empty);
+  assert.equal(empty.text(), '');
+
+  for (const args of [['list', '--from=2026-10-19T12:00:00Z'], ['tokens', '--from=2026-10-19T12:00:00Z'],
+    ['login', 'a@example.com', '--from=2026-10-19T12:00:00Z']]) {
+    await assert.rejects(run(args, capture()), /--from is only supported by traces/);
+  }
+  await assert.rejects(run(['traces', '--from=yesterday'], capture()), /ISO-8601/);
+  await assert.rejects(run(['traces', '--from='], capture()), /--from requires a non-empty value/);
+});
+
 test('extension-path works without a browser bridge and rejects irrelevant options', async () => {
   const { stdout } = await execute(process.execPath, [binary, 'extension-path']);
   assert.equal(stdout.trim(), extensionPath());

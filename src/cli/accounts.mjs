@@ -20,7 +20,7 @@ const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
   comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
-  comm100-accounts traces
+  comm100-accounts traces [--domain=HOST] [--siteId=ID] [--from=TIMESTAMP]
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
 
@@ -28,7 +28,8 @@ list   Print siteId (12 columns), email (30 columns), and domain, ordered by dom
        then email, with optional filters.
 login  Print a valid cached JWT, or sign in once and save the new JWT.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
-traces Print captured API traces as TIME, METHOD, STATUS, URL, newest first.
+traces Print captured API traces as TIME, METHOD, STATUS, URL, newest first; --domain, --siteId and
+       --from (ISO-8601) narrow the rows.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -226,6 +227,7 @@ const traceTime = (time) => (time ? new Date(time).toISOString() : '-');
 export async function run(args, { stdout = process.stdout, request = requestBridge } = {}) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
+    from: { type: 'string' },
     profile: { type: 'string' },
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }
   } });
@@ -236,6 +238,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   }
   if (values['show-password'] && command !== 'list') throw new Error('--show-password is only supported by list.');
   if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');
+  if (values.from !== undefined && command !== 'traces') throw new Error('--from is only supported by traces.');
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
   if (command === 'extension-path') {
     if (Object.keys(values).length) throw new Error('extension-path does not accept account or profile options.');
@@ -249,7 +252,9 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     return;
   }
   if (command === 'traces') {
-    const rows = await listTraces();
+    const from = values.from === undefined ? undefined : Date.parse(values.from);
+    if (Number.isNaN(from)) throw new Error('--from requires an ISO-8601 timestamp, for example 2026-10-19T12:00:00Z.');
+    const rows = await listTraces({ domain: values.domain, siteId: values.siteId, from });
     if (rows.length) {
       const header = `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
       const lines = rows.map((row) =>

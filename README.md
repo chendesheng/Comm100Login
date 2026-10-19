@@ -75,6 +75,8 @@ comm100-accounts tokens
 comm100-accounts tokens --domain=livechat6dash.testing.comm100dev.io --siteId=10010
 
 comm100-accounts traces
+comm100-accounts traces --domain=livechat6dash.testing.comm100dev.io --siteId=10010
+comm100-accounts traces --from=2026-10-19T12:00:00Z
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -139,8 +141,10 @@ truncation, ordered by capture time. The SQLite database is `traces.sqlite` in t
 directory (file mode `0600`, directory `0700`), or `COMM100_TRACES_DB` when set. `traces` reads that
 file directly, works while Chrome is closed, and prints nothing on stdout once the bridge is
 configured but no rows have been captured, and fails with the setup instruction when the bridge has
-never been configured. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers from page
-JavaScript, so those cannot be captured.
+never been configured. `--domain` keeps only rows whose request host matches (scheme and path are
+ignored, like the account filters), `--siteId` keeps rows carrying that `siteId` query value, and
+`--from` sets an inclusive ISO-8601 lower bound on the capture time. Browser HTTP stacks hide
+`Cookie` and `Set-Cookie` headers from page JavaScript, so those cannot be captured.
 
 ### Publishing npm releases
 
