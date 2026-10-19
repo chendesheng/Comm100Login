@@ -1,5 +1,7 @@
 /** Rendering of one stored exchange for the terminal. The rows keep raw headers and bodies. */
 
+import { agentIdFromToken } from '../shared/cookies.js';
+
 const REASONS = new Map([
   [200, 'OK'], [201, 'Created'], [202, 'Accepted'], [204, 'No Content'],
   [301, 'Moved Permanently'], [302, 'Found'], [303, 'See Other'], [304, 'Not Modified'],
@@ -37,10 +39,18 @@ const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 // send stale or contradictory values.
 const CURL_OMITS = new Set(['host', 'content-length', 'connection', 'cookie']);
 
+/** The identifier the replay logs in with: the agent id stamped into the recorded token, else a placeholder. */
+function loginIdentifier(trace) {
+  const authorization = headers(trace.requestHeaders)
+    .find(([name]) => String(name).toLowerCase() === 'authorization');
+  const token = authorization ? String(authorization[1]).replace(/^Bearer\s+/i, '') : '';
+  return agentIdFromToken(token) || '<email>';
+}
+
 /** One login invocation per trace: the site id narrows the account the CLI has to pick. */
 function loginCommand(trace) {
   const siteId = new URL(trace.url).searchParams.get('siteId') || '';
-  return `comm100-accounts login <email>${/^[\w.-]+$/.test(siteId) ? ` --siteId=${siteId}` : ''}`;
+  return `comm100-accounts login ${loginIdentifier(trace)}${/^[\w.-]+$/.test(siteId) ? ` --siteId=${siteId}` : ''}`;
 }
 
 /**

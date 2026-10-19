@@ -107,8 +107,11 @@ printed. This option reuses the same JWT cache and leaves browser cookies untouc
 20 characters. It uses the same password as `login`: verified password first, otherwise the pending
 password. Missing passwords appear as `-`; longer passwords are printed in full.
 
-An email or explicit site ID is usually enough to select an account. If the email matches multiple
-site IDs across different dashboards, the default domain is `${NAMESPACE}dash.testing.comm100dev.io`.
+An email or explicit site ID is usually enough to select an account. `login` also accepts the agent
+id that dashboard tokens carry (`tokens` prints it as `agentId`), which is how a replay command names
+a real account without knowing its address; the id is stored next to the email on the account the
+first time a token is saved. If the email matches multiple site IDs across different dashboards, the
+default domain is `${NAMESPACE}dash.testing.comm100dev.io`.
 For example, `NAMESPACE=livechat6 comm100-accounts login agent@example.com` selects the livechat6
 dashboard. A unique match does not require `NAMESPACE`. Explicit `--domain` always takes precedence;
 multiple sites remaining on the same dashboard require `--siteId`. Among records for the same site,
@@ -129,12 +132,13 @@ is removed from the cache. Two-factor accounts require browser sign-in. CLI logi
 browser cookies, and failed credentials are never automatically retried.
 
 `tokens` prints all shared cached JWTs, including expired tokens, as a formatted JSON array ordered
-by dashboard, site id, and email. Each entry includes the full JWT, account scope, cache save time,
-server expiry, `fresh` status, decoded `header` and `payload`, and `claimTimes` with UTC dates for
-numeric `iat`, `nbf`, and `exp` claims. Nested payload data is preserved. Decoding does not verify the
-signature; `fresh` uses the same local expiry checks as `login`. A malformed JWT is listed with a
-`decodeError` so other entries can still be inspected. Use `--domain` and/or `--siteId` to filter.
-An empty cache prints `[]`. The command only reads from the worker and never signs in or renews tokens.
+by dashboard, site id, and email. Each entry includes the full JWT, account scope, its `agentId`
+when the account or token carries one, cache save time, server expiry, `fresh` status, decoded
+`header` and `payload`, and `claimTimes` with UTC dates for numeric `iat`, `nbf`, and `exp` claims.
+Nested payload data is preserved. Decoding does not verify the signature; `fresh` uses the same
+local expiry checks as `login`. A malformed JWT is listed with a `decodeError` so other entries can
+still be inspected. Use `--domain` and/or `--siteId` to filter. An empty cache prints `[]`. The command
+only reads from the worker and never signs in or renews tokens.
 
 `traces` prints captured API exchanges as `ID`, `TIME`, `METHOD`, `STATUS`, and URL columns, newest
 first. `ID` increases with every capture and is never reused; `TIME` is the capture time in UTC
@@ -152,12 +156,14 @@ inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration 
 now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>` prints that one
 exchange the way it looked on the wire: request line, `Host`, request headers and body, then the
 response status line, response headers and body. `traces <id> --curl` prints a `curl` command that
-replays it: every recorded header except `Host`, `Content-Length` and `Cookie`, an `Authorization`
-taken from `$(comm100-accounts login <email> --siteId=…)`, cookies from
-`-b "$(comm100-accounts login <email> --siteId=… --cookie)"`, and the request body as `--data-raw`.
-Replace `<email>` with the account's address; the recorded token is replaced so the replay uses a
-fresh one. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers from page JavaScript, so those
-cannot be captured.
+replays it as-is: every recorded header except `Host`, `Content-Length` and `Cookie`, an
+`Authorization` taken from `$(comm100-accounts login <id> --siteId=…)`, cookies from
+`-b "$(comm100-accounts login <id> --siteId=… --cookie)"`, and the request body as `--data-raw`. The
+`<id>` is the `agentId` claim of the recorded token, which `login` accepts in place of an email, so
+the command runs without editing. An exchange captured without a token keeps `<email>` as a
+placeholder, because it names no agent. The recorded token itself is never reused, so the replay
+authenticates with a fresh one. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers from page
+JavaScript, so those cannot be captured.
 
 ### Publishing npm releases
 

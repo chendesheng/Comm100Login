@@ -76,6 +76,18 @@ test('a recorded bearer is replaced by a fresh login and transport headers are d
   assert(!rendered.includes('content-length'));
 });
 
+test('an authenticated trace replays with the agent id its token carries', () => {
+  const bearer = `h.${Buffer.from(JSON.stringify({
+    exp: 4102444800, agentId: '08edd2e8-350a-43a8-a531-b2252044cbe0'
+  })).toString('base64url')}.s`;
+  const rendered = formatCurlTrace(exchange({ requestHeaders: [['Authorization', `Bearer ${bearer}`]] }));
+  assert(rendered.includes(
+    '-H "Authorization: Bearer $(comm100-accounts login 08edd2e8-350a-43a8-a531-b2252044cbe0 --siteId=10010)"'));
+  assert(rendered.includes(
+    '-b "$(comm100-accounts login 08edd2e8-350a-43a8-a531-b2252044cbe0 --siteId=10010 --cookie)"'));
+  assert(!rendered.includes('<email>'));
+});
+
 test('a body is shell-quoted even when it contains single quotes', () => {
   const rendered = formatCurlTrace(exchange({ requestBody: `{"note":"it's raw"}` }));
   assert(rendered.includes(`--data-raw '{"note":"it'\\''s raw"}'`));
