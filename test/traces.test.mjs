@@ -43,16 +43,19 @@ test('SQLite traces retain the newest 1000 exchanges by time with exactly eight 
   assert.equal(rows.length, 1000);
   assert.equal(rows[0].url, 'https://example.test/api/1005');
   assert.equal(rows[0].time, 1_700_000_000_000 + 1005);
+  assert.equal(rows[0].id, 1005);
   assert.equal(rows.at(-1).url, 'https://example.test/api/6');
+  assert.equal(rows.at(-1).id, 6);
   assert(rows.every((row, index) => row.url === `https://example.test/api/${1005 - index}`));
 
   const db = await openDatabase(path);
   try {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
-    assert.deepEqual(tables, ['traces']);
+    assert.deepEqual(tables, ['traces', 'sqlite_sequence']);
     const columns = db.prepare('PRAGMA table_info(traces)').all().map((row) => row.name);
     assert.deepEqual(columns, [
-      'url', 'method', 'status_code', 'request_headers', 'request_body', 'response_headers', 'response_body', 'time'
+      'id', 'url', 'method', 'status_code', 'request_headers', 'request_body', 'response_headers',
+      'response_body', 'time'
     ]);
   } finally {
     db.close();
@@ -146,7 +149,7 @@ test('missing trace databases list as empty', async (t) => {
   assert.deepEqual(await listTraces(), []);
 });
 
-test('trace databases written before the time column gain it and keep their rows', async (t) => {
+test('trace databases written before the id and time columns gain them and keep their rows', async (t) => {
   const path = await useTraceDatabase(t);
   const legacy = await openDatabase(path);
   try {
@@ -161,8 +164,8 @@ test('trace databases written before the time column gain it and keep their rows
   }
 
   const beforeWriter = await listTraces();
-  assert.deepEqual(beforeWriter.map((row) => ({ url: row.url, time: row.time })),
-    [{ url: 'https://example.test/api/legacy', time: 0 }]);
+  assert.deepEqual(beforeWriter.map((row) => ({ id: row.id, url: row.url, time: row.time })),
+    [{ id: 1, url: 'https://example.test/api/legacy', time: 0 }]);
 
   const writer = await openTraceWriter();
   writer.insert({
@@ -179,12 +182,14 @@ test('trace databases written before the time column gain it and keep their rows
 
   const rows = await listTraces();
   assert.deepEqual(rows.map((row) => row.url), ['https://example.test/api/new', 'https://example.test/api/legacy']);
+  assert.deepEqual(rows.map((row) => row.id), [2, 1]); // The stored row keeps an id of its own, below the new one.
   assert.equal(rows[0].time, 1_700_000_000_000);
   assert.equal(rows[1].time, 0); // Undated rows keep their data and sort last.
 
   const migrated = await openDatabase(path);
   try {
     const columns = migrated.prepare('PRAGMA table_info(traces)').all().map((row) => row.name);
+    assert(columns.includes('id'));
     assert(columns.includes('time'));
     assert.equal(migrated.prepare('SELECT response_headers FROM traces WHERE url LIKE ?').get('%legacy').response_headers, '[]');
   } finally {

@@ -476,9 +476,9 @@ test('traces prints the capture time first and dates unknown rows with a dash', 
   await run(['traces'], output);
   // Times sort newest first, and a row stored before the column existed keeps a dash.
   assert.equal(output.text(), [
-    `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`,
-    `2026-10-19T20:15:12.481Z ${'POST'.padEnd(7)} ${'201'.padEnd(7)} https://example.test/api/new`,
-    `${'-'.padEnd(24)} ${'GET'.padEnd(7)} ${'200'.padEnd(7)} https://example.test/api/old`
+    `${'ID'.padEnd(4)} ${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`,
+    `${'2'.padEnd(4)} 2026-10-19T20:15:12.481Z ${'POST'.padEnd(7)} ${'201'.padEnd(7)} https://example.test/api/new`,
+    `${'1'.padEnd(4)} ${'-'.padEnd(24)} ${'GET'.padEnd(7)} ${'200'.padEnd(7)} https://example.test/api/old`
   ].join('\n') + '\n');
 });
 
@@ -500,11 +500,11 @@ test('traces filters rows by --domain, --siteId and --from', async (t) => {
   insert('https://b.test/api/z?siteId=10001', Date.parse('2026-10-19T14:00:00Z'));
   writer.close();
 
-  const header = `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
-  const row = (time, url) => `${time.padEnd(24)} ${'GET'.padEnd(7)} ${'200'.padEnd(7)} ${url}`;
+  const header = `${'ID'.padEnd(4)} ${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
+  const row = (id, time, url) => `${String(id).padEnd(4)} ${time.padEnd(24)} ${'GET'.padEnd(7)} ${'200'.padEnd(7)} ${url}`;
   const output = capture();
   await run(['traces', '--domain=a.test', '--siteId=10001', '--from=2026-10-19T11:00:00Z'], output);
-  assert.equal(output.text(), [header, row('2026-10-19T12:00:00.000Z', 'https://a.test/api/x?siteId=10001')].join('\n') + '\n');
+  assert.equal(output.text(), [header, row(1, '2026-10-19T12:00:00.000Z', 'https://a.test/api/x?siteId=10001')].join('\n') + '\n');
 
   // A filter that matches nothing stays silent: the bridge is configured, so there is nothing to report.
   const empty = capture();
@@ -552,7 +552,7 @@ test('traces --from accepts durations counted back from now', async (t) => {
   const urls = async (from) => {
     const output = capture();
     await run(['traces', `--from=${from}`], output);
-    return output.text().split('\n').slice(1).filter(Boolean).map((line) => line.slice(25).split(' ').at(-1));
+    return output.text().split('\n').slice(1).filter(Boolean).map((line) => line.split(/\s+/).at(-1));
   };
   assert.deepEqual(await urls('1h'), ['https://a.test/api/recent']);
   assert.deepEqual(await urls('1h30m'), ['https://a.test/api/recent']);

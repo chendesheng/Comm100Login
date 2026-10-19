@@ -8,6 +8,7 @@ export const TRACE_LIMIT = 1000;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     url TEXT NOT NULL,
     method TEXT NOT NULL,
     status_code INTEGER NOT NULL,
@@ -22,6 +23,9 @@ const SCHEMA = `
 // Databases written before the time column existed keep their rows; only new rows carry a time.
 const ADD_TIME = 'ALTER TABLE traces ADD COLUMN time INTEGER NOT NULL DEFAULT 0';
 
+// A database written before the id column is rebuilt so stored rows get increasing ids of their own.
+const COPY_COLUMNS = 'url, method, status_code, request_headers, request_body, response_headers, response_body, time';
+
 const INSERT = `
   INSERT INTO traces
     (url, method, status_code, request_headers, request_body, response_headers, response_body, time)
@@ -33,15 +37,13 @@ const PRUNE = `
   WHERE rowid NOT IN (SELECT rowid FROM traces ORDER BY time DESC, rowid DESC LIMIT 1000)
 `;
 
-const LIST = `
-  SELECT time, method, status_code AS statusCode, url
-  FROM traces ORDER BY time DESC, rowid DESC LIMIT 1000
-`;
-
-// Reading a database written before the time column keeps printing rows; they show no time.
-const LEGACY_LIST = `
-  SELECT 0 AS time, method, status_code AS statusCode, url
-  FROM traces ORDER BY rowid DESC LIMIT 1000
+// Both columns arrived after the first databases were written, and a reader may run before the
+// writer has migrated: a missing column is projected from the rowid or reported as no time.
+const listQuery = (columns) => `
+  SELECT ${columns.includes('id') ? 'id' : 'rowid AS id'},
+         ${columns.includes('time') ? 'time' : '0 AS time'},
+         method, status_code AS statusCode, url
+  FROM traces ORDER BY ${columns.includes('time') ? 'time DESC, rowid DESC' : 'rowid DESC'} LIMIT 1000
 `;
 
 export const traceDatabasePath = () => (process.env.COMM100_TRACES_DB
@@ -102,6 +104,12 @@ export async function openTraceWriter() {
     db.exec(SCHEMA);
     const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
     if (!columns.includes('time')) db.exec(ADD_TIME);
+    if (!columns.includes('id')) {
+      db.exec(`ALTER TABLE traces RENAME TO traces_without_id;
+        ${SCHEMA}
+        INSERT INTO traces (${COPY_COLUMNS}) SELECT ${COPY_COLUMNS} FROM traces_without_id ORDER BY rowid;
+        DROP TABLE traces_without_id;`);
+    }
     await setMode(path, 0o600);
     const insertStatement = db.prepare(INSERT);
     const pruneStatement = db.prepare(PRUNE);
@@ -175,7 +183,7 @@ export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, fro
   try {
     db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;');
     const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
-    statement = db.prepare(columns.includes('time') ? LIST : LEGACY_LIST);
+    statement = db.prepare(listQuery(columns));
     return statement.all().filter((row) => keepsTrace(row, { domain, siteId, from }));
   } catch (error) {
     if (String(error?.message).includes('no such table: traces')) return [];

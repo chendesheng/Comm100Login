@@ -134,20 +134,21 @@ signature; `fresh` uses the same local expiry checks as `login`. A malformed JWT
 `decodeError` so other entries can still be inspected. Use `--domain` and/or `--siteId` to filter.
 An empty cache prints `[]`. The command only reads from the worker and never signs in or renews tokens.
 
-`traces` prints captured API exchanges as `TIME`, `METHOD`, `STATUS`, and URL columns, newest first.
-`TIME` is the capture time in UTC ISO-8601 with milliseconds; rows recorded before that column
-existed print `-` and sort last. The extension records same-origin `/api/*` `fetch` and asynchronous
-XHR calls made by `/ui/` dashboards (`/api/login/*` is excluded), and the native host stores the most
-recent 1,000 exchanges with verbatim request and response headers and bodies — no redaction or
-truncation, ordered by capture time. The SQLite database is `traces.sqlite` in the CLI configuration
-directory (file mode `0600`, directory `0700`), or `COMM100_TRACES_DB` when set. `traces` reads that
-file directly, works while Chrome is closed, and prints nothing on stdout once the bridge is
-configured but no rows have been captured, and fails with the setup instruction when the bridge has
-never been configured. `--domain` keeps only rows whose request host matches (scheme and path are
-ignored, like the account filters), `--siteId` keeps rows carrying that `siteId` query value, and
-`--from` sets an inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration
-counted back from now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). Browser HTTP
-stacks hide `Cookie` and `Set-Cookie` headers from page JavaScript, so those cannot be captured.
+`traces` prints captured API exchanges as `ID`, `TIME`, `METHOD`, `STATUS`, and URL columns, newest
+first. `ID` increases with every capture and is never reused; `TIME` is the capture time in UTC
+ISO-8601 with milliseconds. Rows recorded before those columns existed print `-` for the time and
+sort last. The extension records same-origin `/api/*` `fetch` and asynchronous XHR calls made by
+`/ui/` dashboards (`/api/login/*` is excluded), and the native host stores the most recent 1,000
+exchanges with verbatim request and response headers and bodies — no redaction or truncation,
+ordered by capture time. The SQLite database is `traces.sqlite` in the CLI configuration directory
+(file mode `0600`, directory `0700`), or `COMM100_TRACES_DB` when set. `traces` reads that file
+directly, works while Chrome is closed, and prints nothing on stdout once the bridge is configured
+but no rows have been captured, and fails with the setup instruction when the bridge has never been
+configured. `--domain` keeps only rows whose request host matches (scheme and path are ignored, like
+the account filters), `--siteId` keeps rows carrying that `siteId` query value, and `--from` sets an
+inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration counted back from
+now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). Browser HTTP stacks hide `Cookie`
+and `Set-Cookie` headers from page JavaScript, so those cannot be captured.
 
 ### Publishing npm releases
 

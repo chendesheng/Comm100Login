@@ -273,9 +273,9 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     const from = values.from === undefined ? undefined : resolveFrom(values.from);
     const rows = await listTraces({ domain: values.domain, siteId: values.siteId, from });
     if (rows.length) {
-      const header = `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
+      const header = `${'ID'.padEnd(4)} ${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
       const lines = rows.map((row) =>
-        `${traceTime(row.time).padEnd(24)} ${row.method.padEnd(7)} ${String(row.statusCode).padEnd(7)} ${row.url}`);
+        `${String(row.id).padEnd(4)} ${traceTime(row.time).padEnd(24)} ${row.method.padEnd(7)} ${String(row.statusCode).padEnd(7)} ${row.url}`);
       stdout.write([header, ...lines].join('\n') + '\n');
     } else if (!process.env.COMM100_TRACES_DB && (await readBridgeConfig()).connections.length === 0) {
       throw new Error(
