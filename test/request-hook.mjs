@@ -9,6 +9,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function setup(path = '/ui/99999/entry/') {
   const network = [];
+  const traces = [];
   const config = { jwt: 'fresh', delay: 10, checks: 0, renewals: 0 };
   const window = new EventTarget();
   class PageRequest extends Request {
@@ -40,6 +41,7 @@ function setup(path = '/ui/99999/entry/') {
       this.dispatchEvent(new Event('readystatechange'));
     }
     setRequestHeader(name, value) { this.headers.append(name, value); }
+    getAllResponseHeaders() { return 'Content-Type: application/json\r\nX-Test: yes\r\n'; }
     send(body) {
       const record = { url: this.url, auth: this.headers.get('authorization'), body, method: this.method,
         custom: this.headers.get('x-custom'), credentials: this.withCredentials };
@@ -66,6 +68,8 @@ function setup(path = '/ui/99999/entry/') {
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (data?.source !== 'comm100-request-hook') return;
+    if (data.type === 'api-trace') { traces.push(data.trace); return; }
+    if (data.type !== 'session-request') return;
     config.checks++;
     setTimeout(() => {
       if (data.rejectedToken) { config.renewals++; config.jwt = 'renewed'; }
@@ -76,7 +80,7 @@ function setup(path = '/ui/99999/entry/') {
   const location = new URL(path, origin);
   vm.runInNewContext(source, { window, location,
     Request: PageRequest, Headers, URL, Event, ProgressEvent: Event, DOMException, setTimeout, clearTimeout });
-  return { window, network, config, PageRequest, location };
+  return { window, network, traces, config, PageRequest, location };
 }
 
 function xhrCall(window, url, auth = 'Bearer expired') {
@@ -137,6 +141,48 @@ function xhrCall(window, url, auth = 'Bearer expired') {
   assert.equal((await window.fetch('/api/forbidden')).status, 403);
   assert.equal(config.renewals, before);
   console.log('PASS retry counts are bounded and 403 permission failures do not cause retries');
+}
+{
+  const { window, traces } = setup();
+  const response = await window.fetch('/api/fetch-trace', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{"hello":"world"}'
+  });
+  await response.json();
+  await xhrCall(window, '/api/xhr-trace');
+  await sleep(30);
+  const fetchTrace = traces.find((trace) => trace.url.endsWith('/api/fetch-trace'));
+  assert(fetchTrace, 'fetch trace captured');
+  assert.equal(fetchTrace.method, 'POST');
+  assert.equal(fetchTrace.statusCode, 200);
+  assert.equal(fetchTrace.requestBody, '{"hello":"world"}');
+  assert.deepEqual(fetchTrace.requestHeaders.find(([name]) => name.toLowerCase() === 'authorization'),
+    ['authorization', 'Bearer fresh']);
+  assert.equal(JSON.parse(fetchTrace.responseBody).body, '{"hello":"world"}');
+  const xhrTrace = traces.find((trace) => trace.url.endsWith('/api/xhr-trace'));
+  assert(xhrTrace, 'XHR trace captured');
+  assert.equal(xhrTrace.method, 'POST');
+  assert.equal(xhrTrace.statusCode, 200);
+  assert.equal(xhrTrace.requestBody, 'original body');
+  assert.equal(JSON.parse(xhrTrace.responseBody).auth, 'Bearer fresh');
+  assert.equal(JSON.stringify(xhrTrace.responseHeaders),
+    JSON.stringify([['Content-Type', 'application/json'], ['X-Test', 'yes']]));
+  console.log('PASS fetch and XHR exchanges are traced with raw bodies and headers');
+}
+{
+  const { window, config, traces } = setup();
+  config.jwt = 'revoked';
+  await (await window.fetch('/api/reject', { method: 'POST', body: 'retry body' })).json();
+  config.jwt = 'revoked';
+  await xhrCall(window, '/api/reject');
+  assert.equal((await window.fetch('/api/forbidden')).status, 403);
+  await sleep(50);
+  const retried = traces.filter((trace) => trace.url.endsWith('/api/reject'));
+  assert.deepEqual(retried.map((trace) => trace.statusCode).sort((a, b) => a - b), [200, 200, 401, 401]);
+  const forbidden = traces.filter((trace) => trace.url.endsWith('/api/forbidden'));
+  assert.deepEqual(forbidden.map((trace) => trace.statusCode), [403]);
+  console.log('PASS rejected requests trace both the 401 and the retried outcome, and 403 is captured');
 }
 {
   const { window, network, config } = setup();

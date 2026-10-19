@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 
 export const NATIVE_HOST = 'com.comm100.accounts';
 export const MAX_MESSAGE = 1024 * 1024;
+export const MAX_NATIVE_INPUT = 256 * 1024 * 1024;
 const littleEndian = endianness() === 'LE';
 
 export function encodeMessage(value) {
@@ -15,7 +16,7 @@ export function encodeMessage(value) {
   return Buffer.concat([header, body]);
 }
 
-export function messageReader(onMessage, onError) {
+export function messageReader(onMessage, onError, max = MAX_MESSAGE) {
   let buffer = Buffer.alloc(0);
   let failed = false;
   return (chunk) => {
@@ -24,7 +25,7 @@ export function messageReader(onMessage, onError) {
       buffer = Buffer.concat([buffer, chunk]);
       while (buffer.length >= 4) {
         const size = littleEndian ? buffer.readUInt32LE() : buffer.readUInt32BE();
-        if (!size || size > MAX_MESSAGE) throw new Error('Invalid CLI bridge message size.');
+        if (!size || size > max) throw new Error('Invalid CLI bridge message size.');
         if (buffer.length < size + 4) break;
         const value = JSON.parse(buffer.subarray(4, size + 4).toString('utf8'));
         buffer = buffer.subarray(size + 4);

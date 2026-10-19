@@ -8,6 +8,7 @@
   // Mirrors isSupportedHost() in shared/api.js — content scripts cannot import it. The manifest's
   // matches decide this first; this is the belt to that pair of braces.
   const SUPPORTED_HOST = /(^|\.)(comm100dev\.io|comm100staging\.com|comm100\.io)$/i;
+  const TRACE_MESSAGE_MAX = 256 * 1024 * 1024;
   const hostname = location.hostname;
   if (!SUPPORTED_HOST.test(hostname)) return;
 
@@ -56,8 +57,17 @@
   window.addEventListener('message', async (event) => {
     const data = event.data;
     if (event.source !== window || event.origin !== location.origin ||
-        data?.source !== 'comm100-request-hook' || data.type !== 'session-request' ||
-        typeof data.id !== 'string') return;
+        data?.source !== 'comm100-request-hook') return;
+    if (data.type === 'api-trace') {
+      const trace = data.trace;
+      if (!trace || typeof trace !== 'object') return;
+      let serialized;
+      try { serialized = JSON.stringify(trace); } catch { return; }
+      if (serialized.length > TRACE_MESSAGE_MAX) return;
+      void send({ type: 'captureTrace', trace });
+      return;
+    }
+    if (data.type !== 'session-request' || typeof data.id !== 'string') return;
     let target;
     try { target = new URL(data.url, location.href); } catch { return; }
     if (target.origin !== location.origin || !target.pathname.startsWith('/api/') ||

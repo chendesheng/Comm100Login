@@ -8,7 +8,7 @@ one for the site you are on.
 
 ## Terminal account tool
 
-Requires Node.js 22 or later. Install the CLI and bundled Chrome extension from npm:
+Requires Node.js 22.13+ or 23.4+. Install the CLI and bundled Chrome extension from npm:
 
 ```bash
 npm install --global --foreground-scripts @chendesheng/comm100-auto-login
@@ -73,6 +73,8 @@ comm100-accounts login agent@example.com --cookie
 
 comm100-accounts tokens
 comm100-accounts tokens --domain=livechat6dash.testing.comm100dev.io --siteId=10010
+
+comm100-accounts traces
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -127,6 +129,15 @@ numeric `iat`, `nbf`, and `exp` claims. Nested payload data is preserved. Decodi
 signature; `fresh` uses the same local expiry checks as `login`. A malformed JWT is listed with a
 `decodeError` so other entries can still be inspected. Use `--domain` and/or `--siteId` to filter.
 An empty cache prints `[]`. The command only reads from the worker and never signs in or renews tokens.
+
+`traces` prints captured API exchanges as `METHOD`, `STATUS`, and URL columns, newest first. The
+extension records same-origin `/api/*` `fetch` and asynchronous XHR calls made by `/ui/` dashboards
+(`/api/login/*` is excluded), and the native host stores the most recent 1,000 exchanges with
+verbatim request and response headers and bodies — no redaction or truncation. The SQLite database is
+`traces.sqlite` in the CLI configuration directory (file mode `0600`, directory `0700`), or
+`COMM100_TRACES_DB` when set. `traces` reads that file directly, works while Chrome is closed, and
+prints nothing when there are no rows. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers
+from page JavaScript, so those cannot be captured.
 
 ### Publishing npm releases
 

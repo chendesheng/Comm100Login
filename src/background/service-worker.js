@@ -37,7 +37,7 @@ import {
 } from '../shared/cookies.js';
 import * as store from '../shared/storage.js';
 import { cachedToken } from '../shared/tokens.js';
-import { startCliBridge } from './cli-bridge.js';
+import { sendTrace, startCliBridge } from './cli-bridge.js';
 import {
   COOKIE_HEADER_BUDGET_BYTES,
   cookieHeaderBytes,
@@ -54,6 +54,8 @@ import {
  * worth reading from a log capped at 40 entries.
  */
 const QUIET_OUTCOMES = new Set(['cooldown', 'logged-out', 'no-account']);
+
+const TRACE_MESSAGE_MAX = 256 * 1024 * 1024;
 
 startCliBridge();
 
@@ -112,6 +114,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'requestSession':
           sendResponse(await requestSession(message, sender));
           break;
+        case 'captureTrace':
+          sendResponse(captureTrace(message, sender));
+          break;
         case 'ensureAuth':
           sendResponse(
             await ensureAuth({
@@ -161,6 +166,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return true; // keep the channel open for the async response
 });
+
+/** Re-validate what the content script already checked, against browser-provided sender data. */
+function captureTrace(message, sender) {
+  let page, target;
+  try {
+    page = new URL(sender.url);
+    target = new URL(message?.trace?.url);
+  } catch {
+    return { ok: false, reason: 'unsupported-trace' };
+  }
+  if (sender.tab?.id == null || (sender.frameId !== undefined && sender.frameId !== 0) ||
+      page.origin !== target.origin || !isSupportedHost(page.host) || !routeOriginFor(page.host) ||
+      !/^\/ui(?:\/|$)/i.test(page.pathname) ||
+      !target.pathname.startsWith('/api/') || /^\/api\/login\//i.test(target.pathname)) {
+    return { ok: false, reason: 'unsupported-trace' };
+  }
+  let size;
+  try { size = JSON.stringify(message.trace).length; } catch { return { ok: false, reason: 'unsupported-trace' }; }
+  if (size > TRACE_MESSAGE_MAX) return { ok: false, reason: 'too-large' };
+  sendTrace(message.trace);
+  return { ok: true };
+}
 
 // ---------------------------------------------------------------- session
 

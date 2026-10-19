@@ -2,7 +2,8 @@ import { createConnection, createServer } from 'node:net';
 import { chmod, lstat, mkdir, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { platform } from 'node:os';
-import { encodeMessage, messageReader, socketDirectory, socketPath } from './bridge.mjs';
+import { encodeMessage, MAX_NATIVE_INPUT, messageReader, socketDirectory, socketPath } from './bridge.mjs';
+import { openTraceWriter } from './traces.mjs';
 
 /** Chrome owns stdio; the local socket carries CLI requests to that same native port. */
 export async function startNativeHost({ input = process.stdin, output = process.stdout } = {}) {
@@ -10,6 +11,23 @@ export async function startNativeHost({ input = process.stdin, output = process.
   const clients = new Set();
   const pending = new Map();
   let server, path, closed = false;
+  let writerPromise = null;
+  let traceChain = Promise.resolve();
+  function getWriter() {
+    writerPromise ||= openTraceWriter().catch((error) => {
+      process.stderr.write(`trace database disabled: ${error.message}\n`);
+      return null;
+    });
+    return writerPromise;
+  }
+  function recordTrace(trace) {
+    traceChain = traceChain.then(async () => {
+      const writer = await getWriter();
+      if (writer) writer.insert(trace);
+    }).catch((error) => {
+      process.stderr.write(`trace write failed: ${error.message}\n`);
+    });
+  }
   const send = (value) => output.write(encodeMessage(value));
   async function close() {
     if (closed) return;
@@ -17,6 +35,9 @@ export async function startNativeHost({ input = process.stdin, output = process.
     for (const socket of clients) socket.destroy();
     if (server?.listening) await new Promise((done) => server.close(done));
     if (path && !windows) await rm(path, { force: true });
+    await traceChain;
+    const writer = await writerPromise;
+    writer?.close();
   }
   async function listen(bridgeId) {
     const target = socketPath(bridgeId);
@@ -65,12 +86,14 @@ export async function startNativeHost({ input = process.stdin, output = process.
     if (message?.type === 'ready' && !initializing) {
       initializing = true;
       void listen(message.bridgeId).catch((error) => { process.stderr.write(`${error.message}\n`); void close(); input.destroy(); });
+    } else if (message?.type === 'trace' && message.trace) {
+      recordTrace(message.trace);
     } else if (message?.id && pending.has(message.id)) {
       const socket = pending.get(message.id);
       pending.delete(message.id);
       try { socket.end(encodeMessage(message)); } catch { socket.destroy(); }
     }
-  }, () => { void close(); input.destroy(); }));
+  }, () => { void close(); input.destroy(); }, MAX_NATIVE_INPUT));
   input.on('end', () => { void close(); });
   input.on('error', () => { void close(); });
   return { close };

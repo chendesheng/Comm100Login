@@ -3,6 +3,27 @@ import { tokenIsFresh } from '../shared/tokens.js';
 
 export const NATIVE_HOST = 'com.comm100.accounts';
 const ALARM = 'comm100-cli-bridge';
+const TRACE_QUEUE_MAX = 100;
+const traceQueue = [];
+let port = null;
+
+export function sendTrace(trace) {
+  if (port) {
+    try { port.postMessage({ type: 'trace', trace }); return true; }
+    catch { /* fall through to the queue */ }
+  }
+  if (traceQueue.length >= TRACE_QUEUE_MAX) traceQueue.shift();
+  traceQueue.push(trace);
+  return false;
+}
+
+function flushTraces(current) {
+  while (traceQueue.length) {
+    try { current.postMessage({ type: 'trace', trace: traceQueue[0] }); }
+    catch { return; }
+    traceQueue.shift();
+  }
+}
 
 /** Only invoked over the native port, never through page/content-script messaging. */
 export async function handleCliRequest(request) {
@@ -19,7 +40,6 @@ export async function handleCliRequest(request) {
 
 export function startCliBridge() {
   if (!chrome.runtime.connectNative) return;
-  let port = null;
   let connecting = false;
   async function connect() {
     if (port || connecting) return;
@@ -41,6 +61,7 @@ export function startCliBridge() {
         try { current.postMessage(response); } catch { /* Host disconnected while the write completed. */ }
       });
       current.postMessage({ type: 'ready', bridgeId });
+      flushTraces(current);
     } catch { port = null; }
     finally { connecting = false; }
   }

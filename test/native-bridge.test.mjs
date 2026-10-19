@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { startCliBridge } from '../src/background/cli-bridge.js';
+import { sendTrace, startCliBridge } from '../src/background/cli-bridge.js';
+import { listTraces } from '../src/cli/traces.mjs';
 import { encodeMessage, MAX_MESSAGE, messageReader, NATIVE_HOST, requestSocket, socketPath } from '../src/cli/bridge.mjs';
 import { installBridge, windowsLauncher } from '../src/cli/setup.mjs';
 import { run } from '../src/cli/accounts.mjs';
@@ -109,7 +110,13 @@ test('CLI reads/writes through a real native host process and the service worker
   const host = 'livechat6dash.testing.comm100dev.io';
   const account = { id: 'test-account', email: 'bridge@example.com', domain: host, siteId: '10001', password: 'saved-test-password' };
   let state = storage.normalizeState({ accounts: [account], cliBridgeId: randomUUID() });
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/comm100-accounts-host.mjs', import.meta.url))], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const tracesDirectory = await mkdtemp(join(tmpdir(), 'comm100-traces-bridge-'));
+  const tracesFile = join(tracesDirectory, 'traces.sqlite');
+  const previousTracesDb = process.env.COMM100_TRACES_DB;
+  process.env.COMM100_TRACES_DB = tracesFile;
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/comm100-accounts-host.mjs', import.meta.url))], {
+    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, COMM100_TRACES_DB: tracesFile }
+  });
   const childClosed = once(child, 'close');
   const errors = [];
   child.stderr.on('data', (chunk) => errors.push(chunk.toString()));
@@ -144,9 +151,26 @@ test('CLI reads/writes through a real native host process and the service worker
     child.stdin.end();
     const timer = setTimeout(() => child.kill(), 1000);
     try { await childClosed; }
-    finally { clearTimeout(timer); globalThis.chrome = previous; }
+    finally {
+      clearTimeout(timer);
+      globalThis.chrome = previous;
+      if (previousTracesDb === undefined) delete process.env.COMM100_TRACES_DB;
+      else process.env.COMM100_TRACES_DB = previousTracesDb;
+      await rm(tracesDirectory, { recursive: true, force: true });
+    }
   });
   startCliBridge();
+  const trace = {
+    url: `https://${host}/api/traced`,
+    method: 'POST',
+    statusCode: 201,
+    requestHeaders: [['Authorization', 'Bearer raw-token'], ['Content-Type', 'application/json']],
+    requestBody: '{"bridge":true}',
+    responseHeaders: [['Content-Type', 'application/json']],
+    responseBody: '{"ok":true}'
+  };
+  // The port is still connecting here, so this first trace exercises the queue and its flush.
+  sendTrace(trace);
   await listening;
   const path = socketPath(state.cliBridgeId);
   if (platform() !== 'win32') assert.equal((await stat(path)).mode & 0o777, 0o600);
@@ -156,6 +180,16 @@ test('CLI reads/writes through a real native host process and the service worker
     await run(args, { request, stdout: { write: (text) => { output += text; } } });
     return output;
   };
+  let traced = [];
+  for (let attempt = 0; attempt < 250 && !traced.length; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    traced = await listTraces();
+  }
+  assert.equal(traced.length, 1);
+  assert.equal(traced[0].method, 'POST');
+  assert.equal(traced[0].statusCode, 201);
+  assert.equal(traced[0].url, trace.url);
+  assert.equal(await invoke(['traces']), `METHOD  STATUS  URL\nPOST    201     ${trace.url}\n`);
   assert.equal(await invoke(['list', '--db=/does-not-exist']), `10001        bridge@example.com             ${host}\n`);
   const token = `h.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')}.s`;
   let calls = 0;
@@ -175,5 +209,7 @@ test('CLI reads/writes through a real native host process and the service worker
   await storage.clearAll();
   assert.equal(state.cliBridgeId, bridgeId);
   assert.equal(await invoke(['tokens']), '[]\n');
-  assert.equal(errors.join(''), '');
+  const stderr = errors.join('').split('\n')
+    .filter((line) => !/ExperimentalWarning: SQLite|trace-warnings/.test(line)).join('\n');
+  assert.equal(stderr.trim(), '');
 });

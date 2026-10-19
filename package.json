@@ -21,7 +21,7 @@
     "comm100-accounts": "bin/comm100-accounts.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.13.0 || >=23.4.0"
   },
   "scripts": {
     "build:extension": "node scripts/build-extension.mjs",

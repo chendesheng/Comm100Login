@@ -12,6 +12,7 @@ import { cachedToken, tokenIsFresh } from '../shared/tokens.js';
 import { chromeDataDirectory, requestBridge } from './bridge.mjs';
 import { installBridge } from './setup.mjs';
 import { extensionPath } from './extension-path.mjs';
+import { listTraces } from './traces.mjs';
 export { tokenIsFresh } from '../shared/tokens.js';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -19,6 +20,7 @@ const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
   comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
+  comm100-accounts traces
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
 
@@ -26,6 +28,7 @@ list   Print siteId (12 columns), email (30 columns), and domain, ordered by dom
        then email, with optional filters.
 login  Print a valid cached JWT, or sign in once and save the new JWT.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
+traces Print captured API traces as METHOD, STATUS, URL, newest first.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -225,8 +228,8 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   } });
   if (values.help || !positionals.length) { stdout.write(help); return; }
   const [command, email] = positionals;
-  if (!['list', 'login', 'tokens', 'setup', 'extension-path'].includes(command) || positionals.length !== (command === 'login' ? 2 : 1)) {
-    throw new Error('Use "list", "login <email>", "tokens", "setup", or "extension-path". See --help.');
+  if (!['list', 'login', 'tokens', 'traces', 'setup', 'extension-path'].includes(command) || positionals.length !== (command === 'login' ? 2 : 1)) {
+    throw new Error('Use "list", "login <email>", "tokens", "traces", "setup", or "extension-path". See --help.');
   }
   if (values['show-password'] && command !== 'list') throw new Error('--show-password is only supported by list.');
   if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');
@@ -240,6 +243,16 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     const database = await findDatabase(values);
     await installBridge(database, await readChromeState(database));
     stdout.write('CLI bridge installed. Reload the Comm100 Auto Login extension in Chrome, then run list/login/tokens.\n');
+    return;
+  }
+  if (command === 'traces') {
+    const rows = await listTraces();
+    if (rows.length) {
+      const header = `${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
+      const lines = rows.map((row) =>
+        `${row.method.padEnd(7)} ${String(row.statusCode).padEnd(7)} ${row.url}`);
+      stdout.write([header, ...lines].join('\n') + '\n');
+    }
     return;
   }
   const state = normalizeState((await request(values, { type: 'getState' })).state);
