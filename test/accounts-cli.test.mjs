@@ -561,6 +561,53 @@ test('traces --from accepts durations counted back from now', async (t) => {
   await assert.rejects(urls('30'), /ISO-8601 timestamp or a duration/);
 });
 
+test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-raw-'));
+  const previous = process.env.COMM100_TRACES_DB;
+  process.env.COMM100_TRACES_DB = join(directory, 'traces.sqlite');
+  t.after(async () => {
+    if (previous === undefined) delete process.env.COMM100_TRACES_DB;
+    else process.env.COMM100_TRACES_DB = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const writer = await openTraceWriter();
+  writer.insert({
+    url: 'https://a.test/api/thing?siteId=10010',
+    time: Date.parse('2026-10-19T12:00:00Z'),
+    method: 'POST',
+    statusCode: 201,
+    requestHeaders: [['content-type', 'application/json']],
+    requestBody: '{"a":1}',
+    responseHeaders: [['content-type', 'application/json']],
+    responseBody: '{"ok":true}'
+  });
+  writer.close();
+
+  const output = capture();
+  await run(['traces', '1'], output);
+  assert.equal(output.text(), [
+    'POST /api/thing?siteId=10010 HTTP/1.1',
+    'Host: a.test',
+    'content-type: application/json',
+    '',
+    '{"a":1}',
+    '',
+    'HTTP/1.1 201 Created',
+    'content-type: application/json',
+    '',
+    '{"ok":true}',
+    ''
+  ].join('\n'));
+
+  await assert.rejects(run(['traces', '9'], capture()), /No trace with id 9/);
+  // An id selects exactly one row, so filters and extra arguments are refused rather than ignored.
+  for (const args of [['traces', '0'], ['traces', 'abc'], ['traces', '1', '2'],
+    ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h']]) {
+    await assert.rejects(run(args, capture()), /positive integer|does not accept|Use "list"/);
+  }
+});
+
 test('extension-path works without a browser bridge and rejects irrelevant options', async () => {
   const { stdout } = await execute(process.execPath, [binary, 'extension-path']);
   assert.equal(stdout.trim(), extensionPath());

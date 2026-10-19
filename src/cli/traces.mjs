@@ -169,6 +169,53 @@ function keepsTrace(row, { domain, siteId, from }) {
   return true;
 }
 
+export async function readTrace(id) {
+  const path = traceDatabasePath();
+  try {
+    await stat(path);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const Database = await loadDatabase();
+  const db = new Database(path);
+  let statement;
+  try {
+    db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;');
+    const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
+    statement = db.prepare(`
+      SELECT ${columns.includes('id') ? 'id' : 'rowid AS id'},
+             ${columns.includes('time') ? 'time' : '0 AS time'},
+             url, method, status_code AS statusCode,
+             request_headers AS requestHeaders, request_body AS requestBody,
+             response_headers AS responseHeaders, response_body AS responseBody
+      FROM traces WHERE ${columns.includes('id') ? 'id' : 'rowid'} = ?
+    `);
+    const row = statement.get(id);
+    if (!row) return null;
+    return {
+      ...row,
+      requestHeaders: parseHeaders(row.requestHeaders),
+      responseHeaders: parseHeaders(row.responseHeaders)
+    };
+  } catch (error) {
+    if (String(error?.message).includes('no such table: traces')) return null;
+    throw error;
+  } finally {
+    statement?.close?.();
+    db.close();
+  }
+}
+
+function parseHeaders(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, from } = {}) {
   const path = traceDatabasePath();
   try {

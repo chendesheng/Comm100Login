@@ -79,6 +79,7 @@ comm100-accounts traces --domain=livechat6dash.testing.comm100dev.io --siteId=10
 comm100-accounts traces --from=2026-10-19T12:00:00Z
 comm100-accounts traces --from=24h
 comm100-accounts traces --from=1h30m
+comm100-accounts traces 42
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -147,8 +148,10 @@ but no rows have been captured, and fails with the setup instruction when the br
 configured. `--domain` keeps only rows whose request host matches (scheme and path are ignored, like
 the account filters), `--siteId` keeps rows carrying that `siteId` query value, and `--from` sets an
 inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration counted back from
-now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). Browser HTTP stacks hide `Cookie`
-and `Set-Cookie` headers from page JavaScript, so those cannot be captured.
+now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>` prints that one
+exchange the way it looked on the wire: request line, `Host`, request headers and body, then the
+response status line, response headers and body. Browser HTTP stacks hide `Cookie` and `Set-Cookie`
+headers from page JavaScript, so those cannot be captured.
 
 ### Publishing npm releases
 

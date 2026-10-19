@@ -12,7 +12,8 @@ import { cachedToken, tokenIsFresh } from '../shared/tokens.js';
 import { chromeDataDirectory, readBridgeConfig, requestBridge } from './bridge.mjs';
 import { installBridge } from './setup.mjs';
 import { extensionPath } from './extension-path.mjs';
-import { listTraces } from './traces.mjs';
+import { listTraces, readTrace } from './traces.mjs';
+import { formatHttpTrace } from './trace-format.mjs';
 export { tokenIsFresh } from '../shared/tokens.js';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -21,6 +22,7 @@ const help = `Usage:
   comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
   comm100-accounts traces [--domain=HOST] [--siteId=ID] [--from=TIMESTAMP_OR_DURATION]
+  comm100-accounts traces <id>
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
 
@@ -28,8 +30,9 @@ list   Print siteId (12 columns), email (30 columns), and domain, ordered by dom
        then email, with optional filters.
 login  Print a valid cached JWT, or sign in once and save the new JWT.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
-traces Print captured API traces as TIME, METHOD, STATUS, URL, newest first; --domain, --siteId and
-       --from (ISO-8601, or a duration back from now such as 30m or 24h) narrow the rows.
+traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first; --domain, --siteId
+       and --from (ISO-8601, or a duration back from now such as 30m or 24h) narrow the rows.
+       "traces <id>" prints that exchange's request and response as raw HTTP.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -250,9 +253,11 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }
   } });
   if (values.help || !positionals.length) { stdout.write(help); return; }
-  const [command, email] = positionals;
-  if (!['list', 'login', 'tokens', 'traces', 'setup', 'extension-path'].includes(command) || positionals.length !== (command === 'login' ? 2 : 1)) {
-    throw new Error('Use "list", "login <email>", "tokens", "traces", "setup", or "extension-path". See --help.');
+  const [command, argument] = positionals;
+  const limits = { login: 2, traces: 2 }[command] || 1;
+  if (!['list', 'login', 'tokens', 'traces', 'setup', 'extension-path'].includes(command) ||
+      positionals.length > limits || positionals.length < (command === 'login' ? 2 : 1)) {
+    throw new Error('Use "list", "login <email>", "tokens", "traces [id]", "setup", or "extension-path". See --help.');
   }
   if (values['show-password'] && command !== 'list') throw new Error('--show-password is only supported by list.');
   if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');
@@ -270,6 +275,16 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     return;
   }
   if (command === 'traces') {
+    if (argument !== undefined) {
+      if (!/^[1-9]\d*$/.test(argument)) throw new Error('Trace id must be a positive integer.');
+      if (values.domain !== undefined || values.siteId !== undefined || values.from !== undefined) {
+        throw new Error('traces <id> prints one exchange and does not accept --domain, --siteId or --from.');
+      }
+      const trace = await readTrace(Number(argument));
+      if (!trace) throw new Error(`No trace with id ${argument}.`);
+      stdout.write(formatHttpTrace(trace));
+      return;
+    }
     const from = values.from === undefined ? undefined : resolveFrom(values.from);
     const rows = await listTraces({ domain: values.domain, siteId: values.siteId, from });
     if (rows.length) {
@@ -303,6 +318,6 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
       }))];
     if (rows.length) stdout.write(rows.join('\n') + '\n');
   } else {
-    stdout.write(await login(state, email, values, request) + '\n');
+    stdout.write(await login(state, argument, values, request) + '\n');
   }
 }
