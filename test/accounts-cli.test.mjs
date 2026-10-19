@@ -642,6 +642,28 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
 
   await assert.rejects(run(['traces', '9'], capture()), /No trace with id 9/);
 
+  // The same view is colored on a terminal and plain when piped or told not to. This machine's
+  // shell exports NO_COLOR and TERM=dumb, so the deciding environment is set here, not inherited.
+  const savedEnv = { NO_COLOR: process.env.NO_COLOR, FORCE_COLOR: process.env.FORCE_COLOR, TERM: process.env.TERM };
+  delete process.env.NO_COLOR;
+  delete process.env.FORCE_COLOR;
+  process.env.TERM = 'xterm-256color';
+  t.after(() => {
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  const terminal = (store) => ({ isTTY: true, write: (text) => { store.text += text; } });
+  const tinted = { text: '' };
+  await run(['traces', '1'], { stdout: terminal(tinted) });
+  assert(tinted.text.includes('\x1b[1;34mPOST\x1b[0m'));
+  assert(tinted.text.includes('\n\n{"a":1}\n\n'));
+  process.env.NO_COLOR = '1';
+  const plainTerminal = { text: '' };
+  await run(['traces', '1'], { stdout: terminal(plainTerminal) });
+  assert(!plainTerminal.text.includes('\x1b['));
+
   const replay = capture();
   await run(['traces', '1', '--curl'], replay);
   assert.equal(replay.text(), [

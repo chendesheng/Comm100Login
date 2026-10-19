@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { formatCurlTrace, formatHttpTrace } from '../src/cli/trace-format.mjs';
+import { formatCurlTrace, formatHttpTrace, wantsColor } from '../src/cli/trace-format.mjs';
 
 const exchange = (extra = {}) => ({
   id: 7,
@@ -42,6 +42,37 @@ test('the request line keeps the origin form and Host comes from the URL', () =>
   }));
   assert(rendered.startsWith('GET /api/report?siteId=1&x=2 HTTP/1.1\nHost: dash.test:8443\nx-test: yes\n'));
   assert(!rendered.includes('spoofed.test'));
+});
+
+test('color marks the request line, header names and status, and never the bodies', () => {
+  const colored = formatHttpTrace(exchange(), { color: true });
+  assert(colored.startsWith('\x1b[1;34mPOST\x1b[0m /api/thing?siteId=10010 \x1b[2mHTTP/1.1\x1b[0m\n'));
+  assert(colored.includes('\x1b[36mHost\x1b[0m: dash.test\n'));
+  assert(colored.includes('\x1b[36maccept\x1b[0m: application/json\n'));
+  assert(colored.includes('\n\n\x1b[2mHTTP/1.1\x1b[0m \x1b[32m200 OK\x1b[0m\n'));
+  // Bodies stay byte-for-byte as captured, so they can be copied out of the terminal.
+  assert(colored.includes('\n\n{"a":1}\n\n'));
+  assert(colored.endsWith('\n\n{"ok":true}\n'));
+  assert.equal(colored.replace(/\x1b\[[0-9;]*m/g, ''), formatHttpTrace(exchange()));
+});
+
+test('the status color follows the class', () => {
+  const line = (statusCode) => formatHttpTrace(exchange({ statusCode, responseBody: '', responseHeaders: [] }), { color: true });
+  assert(line(302).includes('\x1b[36m302 Found\x1b[0m'));
+  assert(line(404).includes('\x1b[33m404 Not Found\x1b[0m'));
+  assert(line(503).includes('\x1b[31m503 Service Unavailable\x1b[0m'));
+  assert(line(0).includes('\x1b[2m0 (no response)\x1b[0m'));
+});
+
+test('color is chosen for a terminal only', () => {
+  const tty = { isTTY: true };
+  assert.equal(wantsColor(tty, {}), true);
+  assert.equal(wantsColor({}, {}), false);
+  assert.equal(wantsColor(tty, { NO_COLOR: '1' }), false);
+  assert.equal(wantsColor(tty, { TERM: 'dumb' }), false);
+  assert.equal(wantsColor({}, { FORCE_COLOR: '1' }), true);
+  assert.equal(wantsColor(tty, { FORCE_COLOR: '0' }), false);
+  assert.equal(wantsColor(tty, { FORCE_COLOR: '1', NO_COLOR: '1' }), true);
 });
 
 test('a curl replay keeps the recorded headers and takes its cookies from the CLI', () => {

@@ -13,7 +13,7 @@ import { chromeDataDirectory, readBridgeConfig, requestBridge } from './bridge.m
 import { installBridge } from './setup.mjs';
 import { extensionPath } from './extension-path.mjs';
 import { listTraces, readTrace } from './traces.mjs';
-import { formatCurlTrace, formatHttpTrace } from './trace-format.mjs';
+import { formatCurlTrace, formatHttpTrace, wantsColor } from './trace-format.mjs';
 export { tokenIsFresh } from '../shared/tokens.js';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -301,7 +301,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
       }
       const trace = await readTrace(Number(argument));
       if (!trace) throw new Error(`No trace with id ${argument}.`);
-      stdout.write(values.curl ? formatCurlTrace(trace) : formatHttpTrace(trace));
+      stdout.write(values.curl ? formatCurlTrace(trace) : formatHttpTrace(trace, { color: wantsColor(stdout) }));
       return;
     }
     const from = values.from === undefined ? undefined : resolveFrom(values.from);

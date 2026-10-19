@@ -155,7 +155,10 @@ the account filters), `--siteId` keeps rows carrying that `siteId` query value, 
 inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration counted back from
 now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>` prints that one
 exchange the way it looked on the wire: request line, `Host`, request headers and body, then the
-response status line, response headers and body. `traces <id> --curl` prints a `curl` command that
+response status line, response headers and body. On a terminal that view is colored: method, version,
+header names and a status colored by class, while header values and bodies stay exactly as recorded
+so they can be copied out. Piped output is plain, `NO_COLOR` and `TERM=dumb` turn color off, and
+`FORCE_COLOR=1` keeps it on through a pager. `traces <id> --curl` prints a `curl` command that
 replays it as-is: `-sS` keeps curl's progress meter quiet while errors still print, and it sends
 every recorded header except `Host`, `Content-Length`, `Cookie` and `Authorization`, the request
 body as `--data-raw`, and the session from `-b "$(comm100-accounts login <id> --siteId=… --cookie)"`.
