@@ -601,6 +601,20 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
   ].join('\n'));
 
   await assert.rejects(run(['traces', '9'], capture()), /No trace with id 9/);
+
+  const replay = capture();
+  await run(['traces', '1', '--curl'], replay);
+  assert.equal(replay.text(), [
+    'curl -X POST \\',
+    "  'https://a.test/api/thing?siteId=10010' \\",
+    "  -H 'content-type: application/json' \\",
+    '  -b "$(comm100-accounts login <email> --siteId=10010 --cookie)" \\',
+    `  --data-raw '{"a":1}'`,
+    ''
+  ].join('\n'));
+  await assert.rejects(run(['traces', '--curl'], capture()), /--curl needs a trace id/);
+  await assert.rejects(run(['list', '--curl'], capture()), /--curl is only supported by traces/);
+
   // An id selects exactly one row, so filters and extra arguments are refused rather than ignored.
   for (const args of [['traces', '0'], ['traces', 'abc'], ['traces', '1', '2'],
     ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h']]) {

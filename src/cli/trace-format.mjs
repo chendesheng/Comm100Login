@@ -30,6 +30,41 @@ function requestHeaders(trace) {
     .map(headerLine);
 }
 
+/** Single-quoted shell word; an embedded quote is closed, escaped and reopened. */
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
+// curl derives these from the URL and body, and cookies are never recorded, so replaying them would
+// send stale or contradictory values.
+const CURL_OMITS = new Set(['host', 'content-length', 'connection', 'cookie']);
+
+/** One login invocation per trace: the site id narrows the account the CLI has to pick. */
+function loginCommand(trace) {
+  const siteId = new URL(trace.url).searchParams.get('siteId') || '';
+  return `comm100-accounts login <email>${/^[\w.-]+$/.test(siteId) ? ` --siteId=${siteId}` : ''}`;
+}
+
+/**
+ * The same exchange as a curl command that replays it. Recorded credentials are stale by the time
+ * they are read, so the bearer and the cookies come from `comm100-accounts login` at replay time.
+ */
+export function formatCurlTrace(trace) {
+  const login = loginCommand(trace);
+  const parts = [`curl -X ${trace.method}`, shellQuote(trace.url)];
+  let authorized = false;
+  for (const [name, value] of headers(trace.requestHeaders)) {
+    const lower = String(name).toLowerCase();
+    if (CURL_OMITS.has(lower)) continue;
+    if (lower === 'authorization') { authorized = true; continue; }
+    parts.push(`-H ${shellQuote(headerLine([name, value]))}`);
+  }
+  if (authorized) parts.push(`-H "Authorization: Bearer $(${login})"`);
+  parts.push(`-b "$(${login} --cookie)"`);
+  if (trace.requestBody) parts.push(`--data-raw ${shellQuote(trace.requestBody)}`);
+  return parts
+    .map((part, index) => `${index ? '  ' : ''}${part}${index === parts.length - 1 ? '' : ' \\'}`)
+    .join('\n') + '\n';
+}
+
 /**
  * One exchange as it would look on the wire: request line, request headers, request body, then the
  * response status line, response headers and response body. Sections are separated by a blank line.

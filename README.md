@@ -80,6 +80,7 @@ comm100-accounts traces --from=2026-10-19T12:00:00Z
 comm100-accounts traces --from=24h
 comm100-accounts traces --from=1h30m
 comm100-accounts traces 42
+comm100-accounts traces 42 --curl
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -150,8 +151,13 @@ the account filters), `--siteId` keeps rows carrying that `siteId` query value, 
 inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration counted back from
 now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>` prints that one
 exchange the way it looked on the wire: request line, `Host`, request headers and body, then the
-response status line, response headers and body. Browser HTTP stacks hide `Cookie` and `Set-Cookie`
-headers from page JavaScript, so those cannot be captured.
+response status line, response headers and body. `traces <id> --curl` prints a `curl` command that
+replays it: every recorded header except `Host`, `Content-Length` and `Cookie`, an `Authorization`
+taken from `$(comm100-accounts login <email> --siteId=…)`, cookies from
+`-b "$(comm100-accounts login <email> --siteId=… --cookie)"`, and the request body as `--data-raw`.
+Replace `<email>` with the account's address; the recorded token is replaced so the replay uses a
+fresh one. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers from page JavaScript, so those
+cannot be captured.
 
 ### Publishing npm releases
 
