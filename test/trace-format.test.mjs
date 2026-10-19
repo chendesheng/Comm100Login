@@ -46,7 +46,7 @@ test('the request line keeps the origin form and Host comes from the URL', () =>
 
 test('a curl replay keeps the recorded headers and takes its cookies from the CLI', () => {
   assert.equal(formatCurlTrace(exchange()), [
-    "curl -X POST \\",
+    "curl -sS -X POST \\",
     "  'https://dash.test/api/thing?siteId=10010' \\",
     "  -H 'accept: application/json' \\",
     "  -H 'content-type: application/json' \\",
@@ -64,7 +64,7 @@ test('the recorded bearer and transport headers are dropped, leaving the session
     requestBody: ''
   }));
   assert.equal(rendered, [
-    "curl -X GET \\",
+    "curl -sS -X GET \\",
     "  'https://dash.test/api/plain' \\",
     "  -H 'x-test: yes' \\",
     '  -b "$(comm100-accounts login <email> --cookie)"',

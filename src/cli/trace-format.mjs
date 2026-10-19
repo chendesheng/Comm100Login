@@ -54,12 +54,13 @@ function loginCommand(trace) {
 }
 
 /**
- * The same exchange as a curl command that replays it. Recorded credentials are stale by the time
- * they are read, so the cookies come from `comm100-accounts login` at replay time; that session is
- * enough on its own, so the recorded bearer is dropped rather than also refreshed.
+ * The same exchange as a curl command that replays it. `-sS` keeps the progress meter out of the
+ * output while still reporting errors. Recorded credentials are stale by the time they are read, so
+ * the cookies come from `comm100-accounts login` at replay time; that session is enough on its own,
+ * so the recorded bearer is dropped rather than also refreshed.
  */
 export function formatCurlTrace(trace) {
-  const parts = [`curl -X ${trace.method}`, shellQuote(trace.url)];
+  const parts = [`curl -sS -X ${trace.method}`, shellQuote(trace.url)];
   for (const [name, value] of headers(trace.requestHeaders)) {
     if (CURL_OMITS.has(String(name).toLowerCase())) continue;
     parts.push(`-H ${shellQuote(headerLine([name, value]))}`);

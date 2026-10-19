@@ -645,7 +645,7 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
   const replay = capture();
   await run(['traces', '1', '--curl'], replay);
   assert.equal(replay.text(), [
-    'curl -X POST \\',
+    'curl -sS -X POST \\',
     "  'https://a.test/api/thing?siteId=10010' \\",
     "  -H 'content-type: application/json' \\",
     '  -b "$(comm100-accounts login <email> --siteId=10010 --cookie)" \\',
