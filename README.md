@@ -85,11 +85,11 @@ to stderr with a nonzero exit status.
 `login --cookie` prints a single cookie string that can be passed directly to curl's `-b` option:
 
 ```bash
-curl -b "$(comm100-accounts login agent@example.com --siteId=10010 --cookie)" \
+curl -b $(comm100-accounts login agent@example.com --siteId=10010 --cookie) \
   'https://livechat6dash.testing.comm100dev.io/api/global/siteActivity:active'
 ```
 
-The output is `token_<siteId>=<jwt>; tokenExpire_<siteId>=<encoded-expiry>; siteList=<siteId>`.
+The output is `token_<siteId>=<jwt>;tokenExpire_<siteId>=<encoded-expiry>;siteList=<siteId>`, with no spaces.
 The two token cookies hold the JWT and its URL-encoded expiry; `siteList` identifies the selected
 site, matching the extension's session cookies. The expiry comes from the login response, or the
 JWT's `exp` claim when no server expiry was supplied. No `Cookie:` prefix or cookie attributes are

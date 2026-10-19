@@ -190,7 +190,7 @@ function loginOutput(record, options) {
   if (!options.cookie) return record.jwtToken;
   const expiresAt = expirySecondsFor(record.jwtToken, record.expireTime);
   const expireTime = record.expireTime || new Date(expiresAt * 1000).toISOString();
-  return `${tokenCookieName(record.siteId)}=${record.jwtToken}; ${tokenExpireCookieName(record.siteId)}=${encodeURIComponent(expireTime)}; siteList=${record.siteId}`;
+  return `${tokenCookieName(record.siteId)}=${record.jwtToken};${tokenExpireCookieName(record.siteId)}=${encodeURIComponent(expireTime)};siteList=${record.siteId}`;
 }
 
 export async function login(state, email, options, request = requestBridge) {

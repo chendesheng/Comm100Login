@@ -1,6 +1,6 @@
 {
   "name": "@chendesheng/comm100-auto-login",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "type": "module",
   "description": "Comm100 auto-login extension and account CLI. The extension has no runtime dependencies; the CLI uses classic-level.",
   "repository": {

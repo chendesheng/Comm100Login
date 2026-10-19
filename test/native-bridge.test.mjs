@@ -163,7 +163,7 @@ test('CLI reads/writes through a real native host process and the service worker
   assert.equal(await invoke(['login', account.email]), token + '\n');
   assert.equal(cachedToken(state, account, host, account.siteId).jwtToken, token);
   assert.equal((await request({}, { type: 'getState' })).state.tokens[0].jwtToken, token);
-  assert((await invoke(['login', account.email, '--cookie'])).startsWith(`token_10001=${token}; tokenExpire_10001=`));
+  assert((await invoke(['login', account.email, '--cookie'])).startsWith(`token_10001=${token};tokenExpire_10001=`));
   assert.equal(calls, 1);
   const decoded = JSON.parse(await invoke(['tokens']));
   assert.equal(decoded[0].jwtToken, token);

@@ -202,7 +202,7 @@ test('login --cookie prints curl -b cookies with the server expiry, including fr
     return Response.json({ errorCode: 0, jwtToken: token, expireTime });
   });
   const args = ['login', 'a@example.com', '--db', f.location];
-  const expected = `token_10001=${token}; tokenExpire_10001=${encodeURIComponent(expireTime)}; siteList=10001\n`;
+  const expected = `token_10001=${token};tokenExpire_10001=${encodeURIComponent(expireTime)};siteList=10001\n`;
   const fresh = capture();
   await run([...args, '--cookie'], fresh);
   assert.equal(fresh.text(), expected);
@@ -228,7 +228,7 @@ test('cookie output uses the resolved site and JWT expiry when server expiry is 
   const args = ['login', 'a@example.com', '--db', f.location, '--cookie'];
   const fresh = capture();
   await run(args, fresh);
-  assert.equal(fresh.text(), `token_72=${token}; tokenExpire_72=${encodeURIComponent(new Date(exp * 1000).toISOString())}; siteList=72\n`);
+  assert.equal(fresh.text(), `token_72=${token};tokenExpire_72=${encodeURIComponent(new Date(exp * 1000).toISOString())};siteList=72\n`);
   const cached = capture();
   await run(args, cached);
   assert.equal(cached.text(), fresh.text());
