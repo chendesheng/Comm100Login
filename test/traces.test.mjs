@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { listTraces, openTraceWriter } from '../src/cli/traces.mjs';
+
+const execute = promisify(execFile);
+const binary = fileURLToPath(new URL('../bin/comm100-accounts.mjs', import.meta.url));
 
 async function openDatabase(path) {
   const sqlite = await import('node:sqlite');
@@ -142,6 +148,29 @@ test('trace filters narrow by dashboard, site id and start time', async (t) => {
   assert.deepEqual((await listTraces({ from: 300 })).map((row) => row.time), [400, 300]);
   assert.deepEqual((await listTraces({ domain: 'a.test', siteId: '10002' })).map((row) => row.time), [200]);
   assert.deepEqual(await listTraces({ domain: 'a.test', siteId: '10002', from: 201 }), []);
+});
+
+test('the traces command prints no experimental sqlite warning', async (t) => {
+  const path = await useTraceDatabase(t);
+  const writer = await openTraceWriter();
+  writer.insert({
+    url: 'https://example.test/api/quiet',
+    method: 'GET',
+    statusCode: 200,
+    requestHeaders: [],
+    requestBody: '',
+    responseHeaders: [],
+    responseBody: '',
+    time: 1_700_000_000_000
+  });
+  writer.close();
+
+  // A child process so the import happens fresh: the warning is emitted while node:sqlite loads.
+  const { stdout, stderr } = await execute(process.execPath, [binary, 'traces'], {
+    env: { ...process.env, COMM100_TRACES_DB: path }
+  });
+  assert.match(stdout, /^ID\s+TIME/);
+  assert.equal(stderr, '');
 });
 
 test('missing trace databases list as empty', async (t) => {

@@ -50,10 +50,31 @@ export const traceDatabasePath = () => (process.env.COMM100_TRACES_DB
   ? resolve(process.env.COMM100_TRACES_DB)
   : join(bridgeConfigDirectory(), 'traces.sqlite'));
 
+/**
+ * `node:sqlite` still announces itself as experimental. That line is emitted during the import, so
+ * it would land on stderr of every traces command and inside the `$(comm100-accounts login …)`
+ * substitution of a replayed curl command. Only this one warning is dropped; the hook is restored
+ * as soon as the import returns, which is when Node has already raised it.
+ */
+async function importSqlite() {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function (warning, ...rest) {
+    const type = String(rest[0] ?? warning?.name ?? '');
+    const message = String(warning?.message ?? warning ?? '');
+    if (type === 'ExperimentalWarning' && message.startsWith('SQLite ')) return;
+    return emitWarning.call(process, warning, ...rest);
+  };
+  try {
+    return await import('node:sqlite');
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+}
+
 async function loadDatabase() {
   let sqlite;
   try {
-    sqlite = await import('node:sqlite');
+    sqlite = await importSqlite();
   } catch {
     throw new Error('SQLite tracing requires Node 22.13+ or 23.4+ (node:sqlite).');
   }
