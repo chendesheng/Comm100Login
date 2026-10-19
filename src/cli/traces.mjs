@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { bridgeConfigDirectory } from './bridge.mjs';
 import { FILTER_ANY, normalizeDomain, normalizeSiteId } from '../shared/storage.js';
 
-export const TRACE_LIMIT = 1000;
+export const TRACE_LIMIT = 5000;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS traces (
@@ -34,7 +34,7 @@ const INSERT = `
 
 const PRUNE = `
   DELETE FROM traces
-  WHERE rowid NOT IN (SELECT rowid FROM traces ORDER BY time DESC, rowid DESC LIMIT 1000)
+  WHERE rowid NOT IN (SELECT rowid FROM traces ORDER BY time DESC, rowid DESC LIMIT ${TRACE_LIMIT})
 `;
 
 // Both columns arrived after the first databases were written, and a reader may run before the
@@ -43,7 +43,7 @@ const listQuery = (columns) => `
   SELECT ${columns.includes('id') ? 'id' : 'rowid AS id'},
          ${columns.includes('time') ? 'time' : '0 AS time'},
          method, status_code AS statusCode, url
-  FROM traces ORDER BY ${columns.includes('time') ? 'time DESC, rowid DESC' : 'rowid DESC'} LIMIT 1000
+  FROM traces ORDER BY ${columns.includes('time') ? 'time DESC, rowid DESC' : 'rowid DESC'} LIMIT ${TRACE_LIMIT}
 `;
 
 export const traceDatabasePath = () => (process.env.COMM100_TRACES_DB

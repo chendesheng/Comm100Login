@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { listTraces, openTraceWriter } from '../src/cli/traces.mjs';
+import { TRACE_LIMIT, listTraces, openTraceWriter } from '../src/cli/traces.mjs';
 
 const execute = promisify(execFile);
 const binary = fileURLToPath(new URL('../bin/comm100-accounts.mjs', import.meta.url));
@@ -30,10 +30,11 @@ async function useTraceDatabase(t) {
   return path;
 }
 
-test('SQLite traces retain the newest 1000 exchanges by time with exactly eight raw columns', async (t) => {
+test('SQLite traces retain only the newest exchanges, by time, with exactly eight raw columns', async (t) => {
   const path = await useTraceDatabase(t);
   const writer = await openTraceWriter();
-  for (let index = 1; index <= 1005; index++) {
+  const extra = 5;
+  for (let index = 1; index <= TRACE_LIMIT + extra; index++) {
     writer.insert({
       url: `https://example.test/api/${index}`,
       method: 'GET',
@@ -46,13 +47,13 @@ test('SQLite traces retain the newest 1000 exchanges by time with exactly eight 
     });
   }
   const rows = await listTraces();
-  assert.equal(rows.length, 1000);
-  assert.equal(rows[0].url, 'https://example.test/api/1005');
-  assert.equal(rows[0].time, 1_700_000_000_000 + 1005);
-  assert.equal(rows[0].id, 1005);
-  assert.equal(rows.at(-1).url, 'https://example.test/api/6');
-  assert.equal(rows.at(-1).id, 6);
-  assert(rows.every((row, index) => row.url === `https://example.test/api/${1005 - index}`));
+  assert.equal(rows.length, TRACE_LIMIT);
+  assert.equal(rows[0].url, `https://example.test/api/${TRACE_LIMIT + extra}`);
+  assert.equal(rows[0].time, 1_700_000_000_000 + TRACE_LIMIT + extra);
+  assert.equal(rows[0].id, TRACE_LIMIT + extra);
+  assert.equal(rows.at(-1).url, `https://example.test/api/${extra + 1}`);
+  assert.equal(rows.at(-1).id, extra + 1);
+  assert(rows.every((row, index) => row.url === `https://example.test/api/${TRACE_LIMIT + extra - index}`));
 
   const db = await openDatabase(path);
   try {

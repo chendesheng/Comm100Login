@@ -144,7 +144,7 @@ only reads from the worker and never signs in or renews tokens.
 first. `ID` increases with every capture and is never reused; `TIME` is the capture time in UTC
 ISO-8601 with milliseconds. Rows recorded before those columns existed print `-` for the time and
 sort last. The extension records same-origin `/api/*` `fetch` and asynchronous XHR calls made by
-`/ui/` dashboards (`/api/login/*` is excluded), and the native host stores the most recent 1,000
+`/ui/` dashboards (`/api/login/*` is excluded), and the native host stores the most recent 5,000
 exchanges with verbatim request and response headers and bodies — no redaction or truncation,
 ordered by capture time. The SQLite database is `traces.sqlite` in the CLI configuration directory
 (file mode `0600`, directory `0700`), or `COMM100_TRACES_DB` when set. `traces` reads that file
