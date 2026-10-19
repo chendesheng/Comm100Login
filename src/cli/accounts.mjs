@@ -28,7 +28,7 @@ list   Print siteId (12 columns), email (30 columns), and domain, ordered by dom
        then email, with optional filters.
 login  Print a valid cached JWT, or sign in once and save the new JWT.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
-traces Print captured API traces as METHOD, STATUS, URL, newest first.
+traces Print captured API traces as TIME, METHOD, STATUS, URL, newest first.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -220,6 +220,9 @@ export async function login(state, email, options, request = requestBridge) {
   return loginOutput(record, options);
 }
 
+// UTC ISO-8601 keeps the newest-first trace rows comparable; rows stored before the column show "-".
+const traceTime = (time) => (time ? new Date(time).toISOString() : '-');
+
 export async function run(args, { stdout = process.stdout, request = requestBridge } = {}) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
@@ -248,9 +251,9 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   if (command === 'traces') {
     const rows = await listTraces();
     if (rows.length) {
-      const header = `${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
+      const header = `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
       const lines = rows.map((row) =>
-        `${row.method.padEnd(7)} ${String(row.statusCode).padEnd(7)} ${row.url}`);
+        `${traceTime(row.time).padEnd(24)} ${row.method.padEnd(7)} ${String(row.statusCode).padEnd(7)} ${row.url}`);
       stdout.write([header, ...lines].join('\n') + '\n');
     } else if (!process.env.COMM100_TRACES_DB && (await readBridgeConfig()).connections.length === 0) {
       throw new Error(

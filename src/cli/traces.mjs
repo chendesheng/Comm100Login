@@ -13,23 +13,33 @@ const SCHEMA = `
     request_headers TEXT NOT NULL,
     request_body TEXT NOT NULL,
     response_headers TEXT NOT NULL,
-    response_body TEXT NOT NULL
+    response_body TEXT NOT NULL,
+    time INTEGER NOT NULL
   ) STRICT;
 `;
 
+// Databases written before the time column existed keep their rows; only new rows carry a time.
+const ADD_TIME = 'ALTER TABLE traces ADD COLUMN time INTEGER NOT NULL DEFAULT 0';
+
 const INSERT = `
   INSERT INTO traces
-    (url, method, status_code, request_headers, request_body, response_headers, response_body)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
+    (url, method, status_code, request_headers, request_body, response_headers, response_body, time)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const PRUNE = `
   DELETE FROM traces
-  WHERE rowid NOT IN (SELECT rowid FROM traces ORDER BY rowid DESC LIMIT 1000)
+  WHERE rowid NOT IN (SELECT rowid FROM traces ORDER BY time DESC, rowid DESC LIMIT 1000)
 `;
 
 const LIST = `
-  SELECT method, status_code AS statusCode, url
+  SELECT time, method, status_code AS statusCode, url
+  FROM traces ORDER BY time DESC, rowid DESC LIMIT 1000
+`;
+
+// Reading a database written before the time column keeps printing rows; they show no time.
+const LEGACY_LIST = `
+  SELECT 0 AS time, method, status_code AS statusCode, url
   FROM traces ORDER BY rowid DESC LIMIT 1000
 `;
 
@@ -74,6 +84,9 @@ function validate(trace) {
   if (!Number.isInteger(trace.statusCode) || trace.statusCode < 0 || trace.statusCode > 599) {
     throw new Error('Trace status code must be an integer from 0 to 599.');
   }
+  if (!Number.isInteger(trace.time) || trace.time < 0) {
+    throw new Error('Trace time must be epoch milliseconds.');
+  }
 }
 
 export async function openTraceWriter() {
@@ -86,6 +99,8 @@ export async function openTraceWriter() {
   try {
     db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
+    const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
+    if (!columns.includes('time')) db.exec(ADD_TIME);
     await setMode(path, 0o600);
     const insertStatement = db.prepare(INSERT);
     const pruneStatement = db.prepare(PRUNE);
@@ -101,7 +116,8 @@ export async function openTraceWriter() {
             headersJson(trace.requestHeaders),
             String(trace.requestBody ?? ''),
             headersJson(trace.responseHeaders),
-            String(trace.responseBody ?? '')
+            String(trace.responseBody ?? ''),
+            trace.time
           );
           pruneStatement.run();
           db.exec('COMMIT');
@@ -135,7 +151,8 @@ export async function listTraces() {
   let statement;
   try {
     db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;');
-    statement = db.prepare(LIST);
+    const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
+    statement = db.prepare(columns.includes('time') ? LIST : LEGACY_LIST);
     return statement.all();
   } catch (error) {
     if (String(error?.message).includes('no such table: traces')) return [];

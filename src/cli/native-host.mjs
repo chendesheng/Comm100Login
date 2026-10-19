@@ -21,9 +21,11 @@ export async function startNativeHost({ input = process.stdin, output = process.
     return writerPromise;
   }
   function recordTrace(trace) {
+    // A content hook older than the time column sends no timestamp; date the row on arrival.
+    const record = { ...trace, time: Number.isInteger(trace?.time) ? trace.time : Date.now() };
     traceChain = traceChain.then(async () => {
       const writer = await getWriter();
-      if (writer) writer.insert(trace);
+      if (writer) writer.insert(record);
     }).catch((error) => {
       process.stderr.write(`trace write failed: ${error.message}\n`);
     });

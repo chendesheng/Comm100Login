@@ -12,6 +12,7 @@ import * as storage from '../src/shared/storage.js';
 import { normalizeState } from '../src/shared/storage.js';
 import { handleCliRequest } from '../src/background/cli-bridge.js';
 import { extensionPath } from '../src/cli/extension-path.mjs';
+import { openTraceWriter } from '../src/cli/traces.mjs';
 
 const execute = promisify(execFile);
 let currentStore;
@@ -451,6 +452,34 @@ test('traces reports an unconfigured bridge and stays silent once configured', a
   const configured = capture();
   await run(['traces'], configured);
   assert.equal(configured.text(), '');
+});
+
+test('traces prints the capture time first and dates unknown rows with a dash', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-time-'));
+  const previous = process.env.COMM100_TRACES_DB;
+  process.env.COMM100_TRACES_DB = join(directory, 'traces.sqlite');
+  t.after(async () => {
+    if (previous === undefined) delete process.env.COMM100_TRACES_DB;
+    else process.env.COMM100_TRACES_DB = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const writer = await openTraceWriter();
+  writer.insert({ url: 'https://example.test/api/old', method: 'GET', statusCode: 200, time: 0,
+    requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  writer.insert({ url: 'https://example.test/api/new', method: 'POST', statusCode: 201,
+    time: Date.parse('2026-10-19T20:15:12.481Z'),
+    requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  writer.close();
+
+  const output = capture();
+  await run(['traces'], output);
+  // Times sort newest first, and a row stored before the column existed keeps a dash.
+  assert.equal(output.text(), [
+    `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`,
+    `2026-10-19T20:15:12.481Z ${'POST'.padEnd(7)} ${'201'.padEnd(7)} https://example.test/api/new`,
+    `${'-'.padEnd(24)} ${'GET'.padEnd(7)} ${'200'.padEnd(7)} https://example.test/api/old`
+  ].join('\n') + '\n');
 });
 
 test('extension-path works without a browser bridge and rejects irrelevant options', async () => {

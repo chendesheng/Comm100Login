@@ -51,7 +51,10 @@
   }
 
   function sendTrace(trace) {
-    try { window.postMessage({ source: 'comm100-request-hook', type: 'api-trace', trace }, location.origin); }
+    try {
+      window.postMessage({ source: 'comm100-request-hook', type: 'api-trace',
+        trace: { ...trace, time: Date.now() } }, location.origin);
+    }
     catch { /* tracing must never change request behavior */ }
   }
 

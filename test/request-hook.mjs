@@ -156,6 +156,7 @@ function xhrCall(window, url, auth = 'Bearer expired') {
   assert(fetchTrace, 'fetch trace captured');
   assert.equal(fetchTrace.method, 'POST');
   assert.equal(fetchTrace.statusCode, 200);
+  assert(Number.isInteger(fetchTrace.time) && fetchTrace.time > 0, 'fetch trace carries a capture time');
   assert.equal(fetchTrace.requestBody, '{"hello":"world"}');
   assert.deepEqual(fetchTrace.requestHeaders.find(([name]) => name.toLowerCase() === 'authorization'),
     ['authorization', 'Bearer fresh']);

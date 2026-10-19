@@ -164,6 +164,7 @@ test('CLI reads/writes through a real native host process and the service worker
     url: `https://${host}/api/traced`,
     method: 'POST',
     statusCode: 201,
+    time: Date.parse('2026-10-19T20:15:12.481Z'),
     requestHeaders: [['Authorization', 'Bearer raw-token'], ['Content-Type', 'application/json']],
     requestBody: '{"bridge":true}',
     responseHeaders: [['Content-Type', 'application/json']],
@@ -189,7 +190,9 @@ test('CLI reads/writes through a real native host process and the service worker
   assert.equal(traced[0].method, 'POST');
   assert.equal(traced[0].statusCode, 201);
   assert.equal(traced[0].url, trace.url);
-  assert.equal(await invoke(['traces']), `METHOD  STATUS  URL\nPOST    201     ${trace.url}\n`);
+  assert.equal(traced[0].time, trace.time);
+  assert.equal(await invoke(['traces']), `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL\n`
+    + `2026-10-19T20:15:12.481Z ${'POST'.padEnd(7)} ${'201'.padEnd(7)} ${trace.url}\n`);
   assert.equal(await invoke(['list', '--db=/does-not-exist']), `10001        bridge@example.com             ${host}\n`);
   const token = `h.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')}.s`;
   let calls = 0;

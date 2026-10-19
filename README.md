@@ -130,15 +130,17 @@ signature; `fresh` uses the same local expiry checks as `login`. A malformed JWT
 `decodeError` so other entries can still be inspected. Use `--domain` and/or `--siteId` to filter.
 An empty cache prints `[]`. The command only reads from the worker and never signs in or renews tokens.
 
-`traces` prints captured API exchanges as `METHOD`, `STATUS`, and URL columns, newest first. The
-extension records same-origin `/api/*` `fetch` and asynchronous XHR calls made by `/ui/` dashboards
-(`/api/login/*` is excluded), and the native host stores the most recent 1,000 exchanges with
-verbatim request and response headers and bodies — no redaction or truncation. The SQLite database is
-`traces.sqlite` in the CLI configuration directory (file mode `0600`, directory `0700`), or
-`COMM100_TRACES_DB` when set. `traces` reads that file directly, works while Chrome is closed, and
-prints nothing on stdout once the bridge is configured but no rows have been captured, and fails
-with the setup instruction when the bridge has never been configured. Browser HTTP stacks hide
-`Cookie` and `Set-Cookie` headers from page JavaScript, so those cannot be captured.
+`traces` prints captured API exchanges as `TIME`, `METHOD`, `STATUS`, and URL columns, newest first.
+`TIME` is the capture time in UTC ISO-8601 with milliseconds; rows recorded before that column
+existed print `-` and sort last. The extension records same-origin `/api/*` `fetch` and asynchronous
+XHR calls made by `/ui/` dashboards (`/api/login/*` is excluded), and the native host stores the most
+recent 1,000 exchanges with verbatim request and response headers and bodies — no redaction or
+truncation, ordered by capture time. The SQLite database is `traces.sqlite` in the CLI configuration
+directory (file mode `0600`, directory `0700`), or `COMM100_TRACES_DB` when set. `traces` reads that
+file directly, works while Chrome is closed, and prints nothing on stdout once the bridge is
+configured but no rows have been captured, and fails with the setup instruction when the bridge has
+never been configured. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers from page
+JavaScript, so those cannot be captured.
 
 ### Publishing npm releases
 
