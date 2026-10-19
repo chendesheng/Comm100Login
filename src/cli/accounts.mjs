@@ -9,7 +9,7 @@ import { expirySecondsFor, tokenCookieName, tokenExpireCookieName } from '../sha
 import { compareAccountOrder, effectivePassword, filterAccounts, normalizeDomain, normalizeState } from '../shared/storage.js';
 
 import { cachedToken, tokenIsFresh } from '../shared/tokens.js';
-import { chromeDataDirectory, requestBridge } from './bridge.mjs';
+import { chromeDataDirectory, readBridgeConfig, requestBridge } from './bridge.mjs';
 import { installBridge } from './setup.mjs';
 import { extensionPath } from './extension-path.mjs';
 import { listTraces } from './traces.mjs';
@@ -252,6 +252,10 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
       const lines = rows.map((row) =>
         `${row.method.padEnd(7)} ${String(row.statusCode).padEnd(7)} ${row.url}`);
       stdout.write([header, ...lines].join('\n') + '\n');
+    } else if (!process.env.COMM100_TRACES_DB && (await readBridgeConfig()).connections.length === 0) {
+      throw new Error(
+        'No traces have been captured because the CLI bridge is not configured. ' +
+        'Run comm100-accounts setup, then reload the extension.');
     }
     return;
   }

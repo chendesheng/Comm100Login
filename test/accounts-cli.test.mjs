@@ -416,6 +416,43 @@ test('executable reports usage and bridge setup errors without exposing account 
   });
 });
 
+test('traces reports an unconfigured bridge and stays silent once configured', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-config-'));
+  const previous = {
+    xdg: process.env.XDG_CONFIG_HOME,
+    localAppData: process.env.LOCALAPPDATA,
+    tracesDb: process.env.COMM100_TRACES_DB
+  };
+  if (process.platform === 'win32') process.env.LOCALAPPDATA = directory;
+  else process.env.XDG_CONFIG_HOME = directory;
+  delete process.env.COMM100_TRACES_DB;
+  t.after(async () => {
+    if (previous.xdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previous.xdg;
+    if (previous.localAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previous.localAppData;
+    if (previous.tracesDb === undefined) delete process.env.COMM100_TRACES_DB;
+    else process.env.COMM100_TRACES_DB = previous.tracesDb;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const unconfigured = capture();
+  await assert.rejects(run(['traces'], unconfigured), /Run comm100-accounts setup/);
+  assert.equal(unconfigured.text(), '');
+
+  const configDirectory = join(directory, 'comm100-accounts');
+  await mkdir(configDirectory, { recursive: true });
+  await writeFile(join(configDirectory, 'bridge.json'), JSON.stringify({ connections: [{
+    profilePath: '/profile',
+    database: join(directory, 'Local Extension Settings', 'a'.repeat(32)),
+    extensionId: 'a'.repeat(32),
+    bridgeId: '00000000-0000-4000-8000-000000000000'
+  }] }));
+  const configured = capture();
+  await run(['traces'], configured);
+  assert.equal(configured.text(), '');
+});
+
 test('extension-path works without a browser bridge and rejects irrelevant options', async () => {
   const { stdout } = await execute(process.execPath, [binary, 'extension-path']);
   assert.equal(stdout.trim(), extensionPath());

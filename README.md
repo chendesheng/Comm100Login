@@ -136,8 +136,9 @@ extension records same-origin `/api/*` `fetch` and asynchronous XHR calls made b
 verbatim request and response headers and bodies — no redaction or truncation. The SQLite database is
 `traces.sqlite` in the CLI configuration directory (file mode `0600`, directory `0700`), or
 `COMM100_TRACES_DB` when set. `traces` reads that file directly, works while Chrome is closed, and
-prints nothing when there are no rows. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers
-from page JavaScript, so those cannot be captured.
+prints nothing on stdout once the bridge is configured but no rows have been captured, and fails
+with the setup instruction when the bridge has never been configured. Browser HTTP stacks hide
+`Cookie` and `Set-Cookie` headers from page JavaScript, so those cannot be captured.
 
 ### Publishing npm releases
 
