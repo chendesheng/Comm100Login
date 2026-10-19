@@ -20,7 +20,7 @@ const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
   comm100-accounts login <email> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
-  comm100-accounts traces [--domain=HOST] [--siteId=ID] [--from=TIMESTAMP]
+  comm100-accounts traces [--domain=HOST] [--siteId=ID] [--from=TIMESTAMP_OR_DURATION]
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
 
@@ -29,7 +29,7 @@ list   Print siteId (12 columns), email (30 columns), and domain, ordered by dom
 login  Print a valid cached JWT, or sign in once and save the new JWT.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
 traces Print captured API traces as TIME, METHOD, STATUS, URL, newest first; --domain, --siteId and
-       --from (ISO-8601) narrow the rows.
+       --from (ISO-8601, or a duration back from now such as 30m or 24h) narrow the rows.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -224,6 +224,24 @@ export async function login(state, email, options, request = requestBridge) {
 // UTC ISO-8601 keeps the newest-first trace rows comparable; rows stored before the column show "-".
 const traceTime = (time) => (time ? new Date(time).toISOString() : '-');
 
+const DURATION_UNITS = { h: 3_600_000, m: 60_000, s: 1_000 };
+const DURATION = /^(?:\d+[hms])+$/i;
+
+/**
+ * `--from` is either an absolute ISO-8601 timestamp or a duration counted back from now, so
+ * `--from 30m` reads as "the last 30 minutes" and `--from 1h30m` as "the last 90 minutes".
+ */
+export function resolveFrom(value, now = Date.now()) {
+  if (DURATION.test(value)) {
+    let elapsed = 0;
+    for (const [, amount, unit] of value.matchAll(/(\d+)([hms])/gi)) elapsed += Number(amount) * DURATION_UNITS[unit.toLowerCase()];
+    return now - elapsed;
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) throw new Error('--from requires an ISO-8601 timestamp or a duration such as 30m or 24h.');
+  return parsed;
+}
+
 export async function run(args, { stdout = process.stdout, request = requestBridge } = {}) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
@@ -252,8 +270,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     return;
   }
   if (command === 'traces') {
-    const from = values.from === undefined ? undefined : Date.parse(values.from);
-    if (Number.isNaN(from)) throw new Error('--from requires an ISO-8601 timestamp, for example 2026-10-19T12:00:00Z.');
+    const from = values.from === undefined ? undefined : resolveFrom(values.from);
     const rows = await listTraces({ domain: values.domain, siteId: values.siteId, from });
     if (rows.length) {
       const header = `${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;

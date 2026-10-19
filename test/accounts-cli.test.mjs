@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { ClassicLevel } from 'classic-level';
-import { defaultDomain, findDatabase, login as cliLogin, readChromeState, run, tokenIsFresh } from '../src/cli/accounts.mjs';
+import { defaultDomain, findDatabase, login as cliLogin, readChromeState, resolveFrom, run, tokenIsFresh } from '../src/cli/accounts.mjs';
 import * as storage from '../src/shared/storage.js';
 import { normalizeState } from '../src/shared/storage.js';
 import { handleCliRequest } from '../src/background/cli-bridge.js';
@@ -517,6 +517,48 @@ test('traces filters rows by --domain, --siteId and --from', async (t) => {
   }
   await assert.rejects(run(['traces', '--from=yesterday'], capture()), /ISO-8601/);
   await assert.rejects(run(['traces', '--from='], capture()), /--from requires a non-empty value/);
+
+  // Durations count back from now; everything else goes through Date.parse unchanged.
+  const now = Date.parse('2026-10-19T12:00:00Z');
+  assert.equal(resolveFrom('30m', now), now - 30 * 60_000);
+  assert.equal(resolveFrom('24h', now), now - 24 * 3_600_000);
+  assert.equal(resolveFrom('1h30m10s', now), now - (3_600 + 1_800 + 10) * 1_000);
+  assert.equal(resolveFrom('30m1h', now), now - (1_800 + 3_600) * 1_000);
+  assert.equal(resolveFrom('2026-10-19T11:00:00Z', now), Date.parse('2026-10-19T11:00:00Z'));
+  for (const value of ['30', 'h', '24x', '1h 30m']) {
+    assert.throws(() => resolveFrom(value, now), /ISO-8601 timestamp or a duration/);
+  }
+});
+
+test('traces --from accepts durations counted back from now', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-since-'));
+  const previous = process.env.COMM100_TRACES_DB;
+  process.env.COMM100_TRACES_DB = join(directory, 'traces.sqlite');
+  t.after(async () => {
+    if (previous === undefined) delete process.env.COMM100_TRACES_DB;
+    else process.env.COMM100_TRACES_DB = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const recent = Date.now() - 30 * 60_000;
+  const stale = Date.now() - 3 * 3_600_000;
+  const writer = await openTraceWriter();
+  for (const [url, time] of [['https://a.test/api/recent', recent], ['https://a.test/api/stale', stale]]) {
+    writer.insert({ url, time, method: 'GET', statusCode: 200,
+      requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  }
+  writer.close();
+
+  const urls = async (from) => {
+    const output = capture();
+    await run(['traces', `--from=${from}`], output);
+    return output.text().split('\n').slice(1).filter(Boolean).map((line) => line.slice(25).split(' ').at(-1));
+  };
+  assert.deepEqual(await urls('1h'), ['https://a.test/api/recent']);
+  assert.deepEqual(await urls('1h30m'), ['https://a.test/api/recent']);
+  assert.deepEqual(await urls('24h'), ['https://a.test/api/recent', 'https://a.test/api/stale']);
+  assert.deepEqual(await urls('0m'), []);
+  await assert.rejects(urls('30'), /ISO-8601 timestamp or a duration/);
 });
 
 test('extension-path works without a browser bridge and rejects irrelevant options', async () => {
