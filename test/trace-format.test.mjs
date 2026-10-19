@@ -82,7 +82,7 @@ test('a curl replay keeps the recorded headers and takes its cookies from the CL
     "  -H 'accept: application/json' \\",
     "  -H 'content-type: application/json' \\",
     '  -b "$(comm100-accounts login <email> --siteId=10010 --cookie)" \\',
-    `  --data-raw '{"a":1}'`,
+    '  --data-raw "$(comm100-accounts traces 7 --req-body)"',
     ''
   ].join('\n'));
 });
@@ -119,9 +119,11 @@ test('an authenticated trace replays with the agent id its token carries', () =>
   assert(!rendered.includes('<email>'));
 });
 
-test('a body is shell-quoted even when it contains single quotes', () => {
+test('the body is read back through --req-body instead of being embedded', () => {
   const rendered = formatCurlTrace(exchange({ requestBody: `{"note":"it's raw"}` }));
-  assert(rendered.includes(`--data-raw '{"note":"it'\\''s raw"}'`));
+  assert(rendered.includes('--data-raw "$(comm100-accounts traces 7 --req-body)"'));
+  // Quoting is the substitution's job now: no recorded byte can break the shell word.
+  assert(!rendered.includes(`it's raw`));
 });
 
 test('bodies are omitted when empty and a failed request names no status', () => {

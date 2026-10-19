@@ -90,7 +90,7 @@ export function formatCurlTrace(trace) {
     parts.push(`-H ${shellQuote(headerLine([name, value]))}`);
   }
   parts.push(`-b "$(${loginCommand(trace)} --cookie)"`);
-  if (trace.requestBody) parts.push(`--data-raw ${shellQuote(trace.requestBody)}`);
+  if (trace.requestBody) parts.push(`--data-raw "$(comm100-accounts traces ${trace.id} --req-body)"`);
   return parts
     .map((part, index) => `${index ? '  ' : ''}${part}${index === parts.length - 1 ? '' : ' \\'}`)
     .join('\n') + '\n';

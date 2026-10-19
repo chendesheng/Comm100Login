@@ -622,6 +622,16 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
     responseHeaders: [['content-type', 'application/json']],
     responseBody: '{"ok":true}'
   });
+  writer.insert({
+    url: 'https://a.test/api/none?siteId=10010',
+    time: Date.parse('2026-10-19T12:00:01Z'),
+    method: 'GET',
+    statusCode: 204,
+    requestHeaders: [],
+    requestBody: '',
+    responseHeaders: [],
+    responseBody: ''
+  });
   writer.close();
 
   const output = capture();
@@ -671,9 +681,21 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
     "  'https://a.test/api/thing?siteId=10010' \\",
     "  -H 'content-type: application/json' \\",
     '  -b "$(comm100-accounts login <email> --siteId=10010 --cookie)" \\',
-    `  --data-raw '{"a":1}'`,
+    '  --data-raw "$(comm100-accounts traces 1 --req-body)"',
     ''
   ].join('\n'));
+
+  const body = capture();
+  await run(['traces', '1', '--req-body'], body);
+  assert.equal(body.text(), '{"a":1}\n');
+  // A bodyless exchange prints nothing at all, so the substitution stays empty.
+  const noBody = capture();
+  await run(['traces', '2', '--req-body'], noBody);
+  assert.equal(noBody.text(), '');
+  await assert.rejects(run(['traces', '--req-body'], capture()), /--req-body needs a trace id/);
+  await assert.rejects(run(['traces', '1', '--req-body', '--curl'], capture()), /choose one/);
+  await assert.rejects(run(['list', '--req-body'], capture()), /--req-body is only supported by traces/);
+
   await assert.rejects(run(['traces', '--curl'], capture()), /--curl needs a trace id/);
   await assert.rejects(run(['list', '--curl'], capture()), /--curl is only supported by traces/);
 

@@ -161,9 +161,12 @@ so they can be copied out. Piped output is plain, `NO_COLOR` and `TERM=dumb` tur
 `FORCE_COLOR=1` keeps it on through a pager. `traces <id> --curl` prints a `curl` command that
 replays it as-is: `-sS` keeps curl's progress meter quiet while errors still print, and it sends
 every recorded header except `Host`, `Content-Length`, `Cookie` and `Authorization`, the request
-body as `--data-raw`, and the session from `-b "$(comm100-accounts login <id> --siteId=… --cookie)"`.
-One credential is enough — the cookie authenticates the same APIs as the bearer, so refreshing both
-would only duplicate it. The `<id>` is the `agentId` claim of the recorded token, which `login`
+body as `--data-raw "$(comm100-accounts traces <id> --req-body)"`, and the session from
+`-b "$(comm100-accounts login <id> --siteId=… --cookie)"`. `traces <id> --req-body` prints only the
+request body, byte-exact and uncolored, so it can be captured that way; a bodyless exchange prints
+nothing, and the replay then omits `--data-raw` entirely. One credential is enough — the cookie
+authenticates the same APIs as the bearer, so refreshing both would only duplicate it. The `<id>` is
+the `agentId` claim of the recorded token, which `login`
 accepts in place of an email, so the command runs without editing. An exchange captured without a
 token keeps `<email>` as a placeholder, because it names no agent. The recorded token itself is never
 reused, so the replay authenticates with a fresh one. Browser HTTP stacks hide `Cookie` and

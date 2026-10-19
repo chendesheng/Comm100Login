@@ -22,7 +22,7 @@ const help = `Usage:
   comm100-accounts login <email_or_agent_id> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
   comm100-accounts traces [--domain=HOST] [--siteId=ID] [--from=TIMESTAMP_OR_DURATION]
-  comm100-accounts traces <id> [--curl]
+  comm100-accounts traces <id> [--curl | --req-body]
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
 
@@ -33,8 +33,9 @@ login  Print a valid cached JWT, or sign in once and save the new JWT. The accou
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
 traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first; --domain, --siteId
        and --from (ISO-8601, or a duration back from now such as 30m or 24h) narrow the rows.
-       "traces <id>" prints that exchange's request and response as raw HTTP; --curl prints a curl
-       command that replays it with fresh credentials from comm100-accounts login.
+       "traces <id>" prints that exchange's request and response as raw HTTP; --req-body prints only
+       the request body, and --curl prints a curl command that replays it with fresh credentials
+       from comm100-accounts login and the body from --req-body.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -267,7 +268,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     from: { type: 'string' },
     profile: { type: 'string' },
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-    curl: { type: 'boolean' }
+    curl: { type: 'boolean' }, 'req-body': { type: 'boolean' }
   } });
   if (values.help || !positionals.length) { stdout.write(help); return; }
   const [command, argument] = positionals;
@@ -280,6 +281,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   if (values.cookie && command !== 'login') throw new Error('--cookie is only supported by login.');
   if (values.from !== undefined && command !== 'traces') throw new Error('--from is only supported by traces.');
   if (values.curl && command !== 'traces') throw new Error('--curl is only supported by traces.');
+  if (values['req-body'] && command !== 'traces') throw new Error('--req-body is only supported by traces.');
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
   if (command === 'extension-path') {
     if (Object.keys(values).length) throw new Error('extension-path does not accept account or profile options.');
@@ -294,6 +296,8 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   }
   if (command === 'traces') {
     if (values.curl && argument === undefined) throw new Error('--curl needs a trace id: comm100-accounts traces <id> --curl.');
+    if (values['req-body'] && argument === undefined) throw new Error('--req-body needs a trace id: comm100-accounts traces <id> --req-body.');
+    if (values.curl && values['req-body']) throw new Error('--curl and --req-body print different things; choose one.');
     if (argument !== undefined) {
       if (!/^[1-9]\d*$/.test(argument)) throw new Error('Trace id must be a positive integer.');
       if (values.domain !== undefined || values.siteId !== undefined || values.from !== undefined) {
@@ -301,6 +305,11 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
       }
       const trace = await readTrace(Number(argument));
       if (!trace) throw new Error(`No trace with id ${argument}.`);
+      if (values['req-body']) {
+        // Uncolored and byte-exact: this feeds `$(… --req-body)` in the curl command.
+        if (trace.requestBody) stdout.write(trace.requestBody.endsWith('\n') ? trace.requestBody : `${trace.requestBody}\n`);
+        return;
+      }
       stdout.write(values.curl ? formatCurlTrace(trace) : formatHttpTrace(trace, { color: wantsColor(stdout) }));
       return;
     }
