@@ -35,9 +35,9 @@ function requestHeaders(trace) {
 /** Single-quoted shell word; an embedded quote is closed, escaped and reopened. */
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
-// curl derives these from the URL and body, and cookies are never recorded, so replaying them would
-// send stale or contradictory values.
-const CURL_OMITS = new Set(['host', 'content-length', 'connection', 'cookie']);
+// curl derives these from the URL and body, cookies are never recorded, and the session cookie
+// already authenticates the call, so the recorded bearer would only duplicate it with a stale token.
+const CURL_OMITS = new Set(['host', 'content-length', 'connection', 'cookie', 'authorization']);
 
 /** The identifier the replay logs in with: the agent id stamped into the recorded token, else a placeholder. */
 function loginIdentifier(trace) {
@@ -55,20 +55,16 @@ function loginCommand(trace) {
 
 /**
  * The same exchange as a curl command that replays it. Recorded credentials are stale by the time
- * they are read, so the bearer and the cookies come from `comm100-accounts login` at replay time.
+ * they are read, so the cookies come from `comm100-accounts login` at replay time; that session is
+ * enough on its own, so the recorded bearer is dropped rather than also refreshed.
  */
 export function formatCurlTrace(trace) {
-  const login = loginCommand(trace);
   const parts = [`curl -X ${trace.method}`, shellQuote(trace.url)];
-  let authorized = false;
   for (const [name, value] of headers(trace.requestHeaders)) {
-    const lower = String(name).toLowerCase();
-    if (CURL_OMITS.has(lower)) continue;
-    if (lower === 'authorization') { authorized = true; continue; }
+    if (CURL_OMITS.has(String(name).toLowerCase())) continue;
     parts.push(`-H ${shellQuote(headerLine([name, value]))}`);
   }
-  if (authorized) parts.push(`-H "Authorization: Bearer $(${login})"`);
-  parts.push(`-b "$(${login} --cookie)"`);
+  parts.push(`-b "$(${loginCommand(trace)} --cookie)"`);
   if (trace.requestBody) parts.push(`--data-raw ${shellQuote(trace.requestBody)}`);
   return parts
     .map((part, index) => `${index ? '  ' : ''}${part}${index === parts.length - 1 ? '' : ' \\'}`)

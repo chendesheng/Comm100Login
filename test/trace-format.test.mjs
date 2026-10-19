@@ -56,7 +56,7 @@ test('a curl replay keeps the recorded headers and takes its cookies from the CL
   ].join('\n'));
 });
 
-test('a recorded bearer is replaced by a fresh login and transport headers are dropped', () => {
+test('the recorded bearer and transport headers are dropped, leaving the session cookie', () => {
   const rendered = formatCurlTrace(exchange({
     method: 'GET',
     url: 'https://dash.test/api/plain',
@@ -67,13 +67,13 @@ test('a recorded bearer is replaced by a fresh login and transport headers are d
     "curl -X GET \\",
     "  'https://dash.test/api/plain' \\",
     "  -H 'x-test: yes' \\",
-    '  -H "Authorization: Bearer $(comm100-accounts login <email>)" \\',
     '  -b "$(comm100-accounts login <email> --cookie)"',
     ''
   ].join('\n'));
   assert(!rendered.includes('spoofed.test'));
   assert(!rendered.includes('stale'));
   assert(!rendered.includes('content-length'));
+  assert(!rendered.includes('Authorization'));
 });
 
 test('an authenticated trace replays with the agent id its token carries', () => {
@@ -81,10 +81,10 @@ test('an authenticated trace replays with the agent id its token carries', () =>
     exp: 4102444800, agentId: '08edd2e8-350a-43a8-a531-b2252044cbe0'
   })).toString('base64url')}.s`;
   const rendered = formatCurlTrace(exchange({ requestHeaders: [['Authorization', `Bearer ${bearer}`]] }));
-  assert(rendered.includes(
-    '-H "Authorization: Bearer $(comm100-accounts login 08edd2e8-350a-43a8-a531-b2252044cbe0 --siteId=10010)"'));
+  // The bearer names the account for the login call; the session it prints is the only credential sent.
   assert(rendered.includes(
     '-b "$(comm100-accounts login 08edd2e8-350a-43a8-a531-b2252044cbe0 --siteId=10010 --cookie)"'));
+  assert(!rendered.includes('Authorization'));
   assert(!rendered.includes('<email>'));
 });
 

@@ -156,14 +156,15 @@ inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration 
 now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>` prints that one
 exchange the way it looked on the wire: request line, `Host`, request headers and body, then the
 response status line, response headers and body. `traces <id> --curl` prints a `curl` command that
-replays it as-is: every recorded header except `Host`, `Content-Length` and `Cookie`, an
-`Authorization` taken from `$(comm100-accounts login <id> --siteId=…)`, cookies from
-`-b "$(comm100-accounts login <id> --siteId=… --cookie)"`, and the request body as `--data-raw`. The
-`<id>` is the `agentId` claim of the recorded token, which `login` accepts in place of an email, so
-the command runs without editing. An exchange captured without a token keeps `<email>` as a
-placeholder, because it names no agent. The recorded token itself is never reused, so the replay
-authenticates with a fresh one. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers from page
-JavaScript, so those cannot be captured.
+replays it as-is: every recorded header except `Host`, `Content-Length`, `Cookie` and
+`Authorization`, the request body as `--data-raw`, and the session from
+`-b "$(comm100-accounts login <id> --siteId=… --cookie)"`. One credential is enough — the cookie
+authenticates the same APIs as the bearer, so refreshing both would only duplicate it. The `<id>` is
+the `agentId` claim of the recorded token, which `login` accepts in place of an email, so the command
+runs without editing. An exchange captured without a token keeps `<email>` as a placeholder, because
+it names no agent. The recorded token itself is never reused, so the replay authenticates with a
+fresh one. Browser HTTP stacks hide `Cookie` and `Set-Cookie` headers from page JavaScript, so those
+cannot be captured.
 
 ### Publishing npm releases
 
