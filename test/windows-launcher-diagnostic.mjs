@@ -59,6 +59,11 @@ for (let attempt = 0; attempt < 250 && !rows.length; attempt++) {
 console.log('rows:', JSON.stringify(rows));
 assert.equal(rows.length, 1, `trace reached the DB through the batch launcher (stderr: ${stderr})`);
 assert.equal(rows[0].url, 'https://example.test/api/through-bat');
-child.kill();
+// Ending Chrome's input lets the host close SQLite before cmd.exe exits. Killing only
+// the batch wrapper can leave its node.exe child running with the database locked.
+const exited = once(child, 'close');
+child.stdin.end();
+const [exitCode] = await exited;
+assert.equal(exitCode, 0, `batch launcher exited cleanly (stderr: ${stderr})`);
 await rm(directory, { recursive: true, force: true });
 console.log('PASS');
