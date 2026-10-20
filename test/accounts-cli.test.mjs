@@ -719,6 +719,18 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
   await assert.rejects(run(['traces', '1', '--req-body', '--curl'], capture()), /choose one/);
   await assert.rejects(run(['list', '--req-body'], capture()), /--req-body is only supported by traces/);
 
+  const responseBody = capture();
+  await run(['traces', '1', '--resp-body'], responseBody);
+  assert.equal(responseBody.text(), '{"ok":true}\n');
+  // A bodyless response prints nothing at all, so it can be captured the same way.
+  const noResponseBody = capture();
+  await run(['traces', '2', '--resp-body'], noResponseBody);
+  assert.equal(noResponseBody.text(), '');
+  await assert.rejects(run(['traces', '--resp-body'], capture()), /--resp-body needs a trace id/);
+  await assert.rejects(run(['traces', '1', '--resp-body', '--req-body'], capture()), /choose one/);
+  await assert.rejects(run(['traces', '1', '--resp-body', '--curl'], capture()), /choose one/);
+  await assert.rejects(run(['list', '--resp-body'], capture()), /--resp-body is only supported by traces/);
+
   await assert.rejects(run(['traces', '--curl'], capture()), /--curl needs a trace id/);
   await assert.rejects(run(['list', '--curl'], capture()), /--curl is only supported by traces/);
 

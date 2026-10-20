@@ -82,6 +82,7 @@ comm100-accounts traces --from=1h30m
 comm100-accounts traces 42
 comm100-accounts traces 42 --curl
 comm100-accounts traces 42 --curl "-k"
+comm100-accounts traces 42 --resp-body
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -170,9 +171,9 @@ body as `--data-raw "$(comm100-accounts traces <id> --req-body)"`, and the sessi
 `traces <id> --curl "-k"` or `--curl "-k --compressed"`; the quoted text is appended verbatim
 to the generated command. `--curl="-k"` also works, and bare `--curl` adds no extra arguments.
 Use the equals form for a curl argument that is also a CLI option, such as `--curl="--help"`.
-`traces <id> --req-body` prints only the
-request body, byte-exact and uncolored, so it can be captured that way; a bodyless exchange prints
-nothing, and the replay then omits `--data-raw` entirely. One credential is enough — the cookie
+`traces <id> --req-body` and `--resp-body` print only the request or response body, byte-exact and
+uncolored, so they can be captured that way; a bodyless exchange prints nothing. The replay omits
+`--data-raw` entirely when the request body is empty. One credential is enough — the cookie
 authenticates the same APIs as the bearer, so refreshing both would only duplicate it. The `<id>` is
 the `agentId` claim of the recorded token, which `login`
 accepts in place of an email, so the command runs without editing. An exchange captured without a

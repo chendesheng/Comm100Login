@@ -22,7 +22,7 @@ const help = `Usage:
   comm100-accounts login <email_or_agent_id> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
   comm100-accounts traces [--domain=HOST] [--siteId=ID] [--method=METHOD[,METHOD]] [--from=TIMESTAMP_OR_DURATION]
-  comm100-accounts traces <id> [--curl ["ARGS"] | --req-body]
+  comm100-accounts traces <id> [--curl ["ARGS"] | --req-body | --resp-body]
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
 
@@ -35,9 +35,9 @@ traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first;
        --method (one or more, comma separated) and --from (ISO-8601, or a duration back from now such
        as 30m or 24h) narrow the rows.
        "traces <id>" prints that exchange's request and response as raw HTTP without the
-       Authorization header; --req-body prints only the request body, and --curl prints a curl
-       command that replays it with fresh credentials from comm100-accounts login and the body
-       from --req-body.
+       Authorization header; --req-body prints only the request body, --resp-body prints only the
+       response body, and --curl prints a curl command that replays it with fresh credentials from
+       comm100-accounts login and the body from --req-body.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -48,6 +48,8 @@ Options:
   --cookie              Print session cookies for curl -b instead of the JWT (login only)
   --show-password       Include a 20-character password column after email (list only)
   --curl ["ARGS"]       Print a curl replay, appending optional quoted curl arguments (traces only)
+  --req-body            Print only the request body (traces <id> only)
+  --resp-body           Print only the response body (traces <id> only)
   --profile=PATH_OR_NAME  Chrome profile directory (default: Chrome's Default profile)
   --db=PATH              Extension LevelDB directory; overrides profile discovery
   --help                 Show this help
@@ -271,7 +273,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     from: { type: 'string' }, method: { type: 'string' },
     profile: { type: 'string' },
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-    curl: { type: 'boolean' }, 'req-body': { type: 'boolean' }
+    curl: { type: 'boolean' }, 'req-body': { type: 'boolean' }, 'resp-body': { type: 'boolean' }
   };
   // parseArgs has no optional option values, and treats a separate "-k" as another option.
   // Keep bare --curl working while accepting a quoted curl argument string or --curl=ARGS.
@@ -306,6 +308,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   if (values.from !== undefined && command !== 'traces') throw new Error('--from is only supported by traces.');
   if (values.curl && command !== 'traces') throw new Error('--curl is only supported by traces.');
   if (values['req-body'] && command !== 'traces') throw new Error('--req-body is only supported by traces.');
+  if (values['resp-body'] && command !== 'traces') throw new Error('--resp-body is only supported by traces.');
   for (const [name, value] of Object.entries(values)) if (typeof value === 'string' && !value.trim()) throw new Error(`--${name} requires a non-empty value.`);
   if (values.method !== undefined && command !== 'traces') throw new Error('--method is only supported by traces.');
   if (values.method !== undefined && !/^[A-Za-z]+(?:\s*,\s*[A-Za-z]+)*$/.test(values.method)) {
@@ -325,7 +328,10 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   if (command === 'traces') {
     if (values.curl && argument === undefined) throw new Error('--curl needs a trace id: comm100-accounts traces <id> --curl.');
     if (values['req-body'] && argument === undefined) throw new Error('--req-body needs a trace id: comm100-accounts traces <id> --req-body.');
-    if (values.curl && values['req-body']) throw new Error('--curl and --req-body print different things; choose one.');
+    if (values['resp-body'] && argument === undefined) throw new Error('--resp-body needs a trace id: comm100-accounts traces <id> --resp-body.');
+    const outputModes = [values.curl && '--curl', values['req-body'] && '--req-body', values['resp-body'] && '--resp-body']
+      .filter(Boolean);
+    if (outputModes.length > 1) throw new Error(`${outputModes.join(' and ')} print different things; choose one.`);
     if (argument !== undefined) {
       if (!/^[1-9]\d*$/.test(argument)) throw new Error('Trace id must be a positive integer.');
       if (values.domain !== undefined || values.siteId !== undefined || values.from !== undefined ||
@@ -334,9 +340,17 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
       }
       const trace = await readTrace(Number(argument));
       if (!trace) throw new Error(`No trace with id ${argument}.`);
+      // Bodies are uncolored and byte-exact: --req-body feeds `$(… --req-body)` in the curl
+      // command, and both body modes can be redirected or captured as recorded.
+      const writeBody = (body) => {
+        if (body) stdout.write(body.endsWith('\n') ? body : `${body}\n`);
+      };
       if (values['req-body']) {
-        // Uncolored and byte-exact: this feeds `$(… --req-body)` in the curl command.
-        if (trace.requestBody) stdout.write(trace.requestBody.endsWith('\n') ? trace.requestBody : `${trace.requestBody}\n`);
+        writeBody(trace.requestBody);
+        return;
+      }
+      if (values['resp-body']) {
+        writeBody(trace.responseBody);
         return;
       }
       stdout.write(values.curl ? formatCurlTrace(trace, curlArguments) : formatHttpTrace(trace, { color: wantsColor(stdout) }));
