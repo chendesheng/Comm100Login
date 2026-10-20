@@ -25,6 +25,7 @@ import {
 import { platformDomainFor } from '../shared/platforms.js';
 import {
   TOKEN_RE,
+  agentIdFromToken,
   clearSessionCookies,
   ensureSessionCookies,
   findSession,
@@ -32,6 +33,7 @@ import {
   getCookie,
   hasSession,
   isJwtFresh,
+  jwtPayload,
   sessionRemainingMs,
   tokenCookieName
 } from '../shared/cookies.js';
@@ -418,7 +420,7 @@ function siteIdFromUrl(url) {
  * Short-circuit result for "a valid session already exists". Clears failure history, and promotes
  * a password the user typed when the live session proves it works.
  */
-async function alreadySignedIn(state, account, site, host) {
+async function alreadySignedIn(state, account, site, host, session) {
   const hs = state.hostState[host] || {};
   if (hs.consecutiveFailures) await store.clearFailures(host);
   if (account.pendingPassword) {
@@ -428,6 +430,21 @@ async function alreadySignedIn(state, account, site, host) {
   // of which site this dashboard signed us into.
   if (String(account.siteId || '') !== String(site.siteId)) {
     await store.noteSite({ accountId: account.id, site, domain: host });
+  }
+  // Manual sign-ins already have a cookie, so they never reach the login/saveToken path below.
+  // Share that session too, allowing trace replays to find this account by its JWT's agent id.
+  const jwtToken = await tokenFor(host, site.siteId);
+  const agentId = agentIdFromToken(jwtToken);
+  const tokenSite = store.normalizeSiteId(jwtPayload(jwtToken)?.siteId);
+  const cached = state.tokens.find((token) => token.accountId === account.id &&
+    store.normalizeDomain(token.domain) === host && String(token.siteId) === String(site.siteId));
+  const knownAgentId = account.agentId || agentIdFromToken(cached?.jwtToken);
+  if (agentId && isJwtFresh(jwtToken) && tokenSite === String(site.siteId) &&
+      (!knownAgentId || knownAgentId === agentId) &&
+      (cached?.jwtToken !== jwtToken || account.agentId !== agentId)) {
+    await store.saveToken({ accountId: account.id, email: account.email, domain: host,
+      siteId: site.siteId, jwtToken,
+      expireTime: session.expiresAt ? new Date(session.expiresAt).toISOString() : null });
   }
   await setBadge(null);
   return {
@@ -633,7 +650,7 @@ async function runEnsureAuth({
     // and of which site this credential belongs to — so a claim that has not been checked yet must
     // not stand in the way of recognising it. Gates exist to stop logins, nothing else.
     rememberSession(targetHost, site.siteId, current.expiresAt);
-    return alreadySignedIn(state, account, site, targetHost);
+    return alreadySignedIn(state, account, site, targetHost, current);
   }
 
   const hs = state.hostState[targetHost] || {};

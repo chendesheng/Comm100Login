@@ -232,8 +232,8 @@ const listen = listeners[0];
 const call = (message, sender = {}) => new Promise((resolve) => listen(message, sender, resolve));
 
 /** A JWT-shaped token with a chosen expiry, so the pre-flight decodes a real `exp`. */
-const fakeJwt = (expSeconds) =>
-  `h.${Buffer.from(JSON.stringify({ exp: expSeconds })).toString('base64url')}.s`;
+const fakeJwt = (expSeconds, claims = {}) =>
+  `h.${Buffer.from(JSON.stringify({ exp: expSeconds, ...claims })).toString('base64url')}.s`;
 
 const HOST = STUB_HOST;
 const EMAIL = process.env.C100_EMAIL || '';
@@ -440,14 +440,56 @@ check('captured password is pending, not trusted', capturedAccount.password === 
 check('pending account is still selectable', storage.pickAccount(capturedState, HOST)?.email === 'captured@10012.com');
 check('pending account yields an effective password', storage.effectivePassword(capturedAccount) === 'Fresh1');
 
-// A live session proves the pending password works, so it gets promoted without a login call.
-await chrome.cookies.set({ url: `https://${HOST}/`, domain: COOKIE_DOMAIN, path: '/', name: `token_${SITE_ID}`, value: 'a.b.c', httpOnly: true, secure: true, sameSite: 'strict' });
+// A manual sign-in must also make its agent discoverable by the CLI's trace replay.
+const manualAgentId = '00000000-0000-4000-8000-000000000001';
+const manualExpiry = Math.floor(Date.now() / 1000) + 3600;
+const manualToken = fakeJwt(manualExpiry, { agentId: manualAgentId, siteId: SITE_ID });
+await chrome.cookies.set({ url: `https://${HOST}/`, domain: COOKIE_DOMAIN, path: '/', name: `token_${SITE_ID}`, value: manualToken, httpOnly: true, secure: true, sameSite: 'strict' });
 loginCalls = 0;
 const promoteResult = await call({ type: 'ensureAuth', hostname: HOST, siteId: SITE_ID });
 console.log('      ensureAuth ->', JSON.stringify(promoteResult));
 const promoted = (await storage.getState()).accounts.find((a) => a.email === 'captured@10012.com');
 check('pending password promoted from a live session', promoted.password === 'Fresh1' && promoted.pendingPassword === null, promoted);
 check('promotion made no login API call', loginCalls === 0, { loginCalls });
+const manualState = await storage.getState();
+const manualCached = manualState.tokens.find((token) => token.accountId === promoted.id);
+check('manual browser login saves the agent id on the account', promoted.agentId === manualAgentId);
+check('manual browser login shares its JWT with the CLI', manualCached?.jwtToken === manualToken && manualCached?.agentId === manualAgentId);
+const { run: runAccounts } = await import('../src/cli/accounts.mjs');
+const { handleCliRequest } = await import('../src/background/cli-bridge.js');
+let replayToken = '';
+let replayError;
+try {
+  await runAccounts(['login', manualAgentId, `--domain=${HOST}`, `--siteId=${SITE_ID}`], {
+    request: (_options, message) => handleCliRequest(message),
+    stdout: { write: (text) => { replayToken += text; } }
+  });
+} catch (error) {
+  replayError = error;
+}
+check('CLI replay resolves the manually signed-in agent', !replayError, replayError?.message);
+check('CLI replay reuses the browser token without another login', replayToken === `${manualToken}\n` && loginCalls === 0);
+await new Promise((resolve) => setTimeout(resolve, 5));
+await call({ type: 'ensureAuth', hostname: HOST, siteId: SITE_ID });
+check('recognising the same session does not rewrite the token',
+  (await storage.getState()).tokens.find((token) => token.accountId === promoted.id)?.savedAt === manualCached?.savedAt);
+const replacementManualToken = fakeJwt(manualExpiry, { agentId: manualAgentId, siteId: SITE_ID, jti: 'replacement' });
+await chrome.cookies.set({ url: `https://${HOST}/`, domain: COOKIE_DOMAIN, path: '/', name: `token_${SITE_ID}`, value: replacementManualToken });
+await call({ type: 'ensureAuth', hostname: HOST, siteId: SITE_ID });
+check('a replaced browser session updates the shared JWT',
+  (await storage.getState()).tokens.find((token) => token.accountId === promoted.id)?.jwtToken === replacementManualToken);
+for (const [label, value] of [
+  ['another agent', fakeJwt(manualExpiry, { agentId: 'another-agent', siteId: SITE_ID })],
+  ['another site', fakeJwt(manualExpiry, { agentId: manualAgentId, siteId: '424242' })],
+  ['an invalid JWT', 'a.b.c']
+]) {
+  await chrome.cookies.set({ url: `https://${HOST}/`, domain: COOKIE_DOMAIN, path: '/', name: `token_${SITE_ID}`, value });
+  await call({ type: 'ensureAuth', hostname: HOST, siteId: SITE_ID });
+  const guardedState = await storage.getState();
+  check(`a cookie for ${label} does not overwrite the account's shared identity`,
+    guardedState.accounts.find((account) => account.id === promoted.id)?.agentId === manualAgentId &&
+    guardedState.tokens.find((token) => token.accountId === promoted.id)?.jwtToken === replacementManualToken);
+}
 
 // ------------------------------------------------------------ cross-branch cookie isolation
 // Regression: all Comm100 test branches share the comm100dev.io cookie domain, so a leftover
