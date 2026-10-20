@@ -31,13 +31,7 @@ list   Print siteId (12 columns), email (30 columns), and domain, ordered by dom
 login  Print a valid cached JWT, or sign in once and save the new JWT. The account is selected by
        email or by the agent id its dashboard tokens carry.
 tokens Print shared JWTs and decoded headers/payloads as formatted JSON, including expired tokens.
-traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first; --domain, --siteId,
-       --method (one or more, comma separated) and --from (ISO-8601, or a duration back from now such
-       as 30m or 24h) narrow the rows.
-       "traces <id>" prints that exchange's request and response as raw HTTP without the
-       Authorization header; --req-body prints only the request body, --resp-body prints only the
-       response body, and --curl prints a curl command that replays it with fresh credentials from
-       comm100-accounts login and the body from --req-body.
+traces List captured API requests, inspect request/response details, or print a curl replay.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
@@ -45,6 +39,8 @@ Options:
   --domain=HOST          Filter by dashboard; login defaults to $NAMESPACE + dash.testing.comm100dev.io
                         only when multiple site IDs match
   --siteId=ID            Restrict to a site
+  --method=GET,POST      Filter by HTTP method, case-insensitive (traces only)
+  --from=TIME_OR_DURATION Filter by capture time, inclusive: ISO-8601, 30m, 24h or 1h30m (traces only)
   --cookie              Print session cookies for curl -b instead of the JWT (login only)
   --show-password       Include a 20-character password column after email (list only)
   --curl ["ARGS"]       Print a curl replay, appending optional quoted curl arguments (traces only)
@@ -54,7 +50,30 @@ Options:
   --db=PATH              Extension LevelDB directory; overrides profile discovery
   --help                 Show this help
 
-Normal commands read/write through the extension service worker; Chrome must be running.
+API traces:
+  Run comm100-accounts traces to list ID, UTC TIME, METHOD, STATUS and URL, newest first.
+  Combine --domain, --siteId, --method and --from to narrow the list, for example:
+    comm100-accounts traces --domain=livechat6dash.testing.comm100dev.io --siteId=10010 --method=GET,POST --from=30m
+    comm100-accounts traces --from=2026-10-19T12:00:00Z
+    comm100-accounts traces --from=1h30m
+
+  Inspect one exchange as raw HTTP with comm100-accounts traces <id>.
+  The request Authorization header is omitted. Listing filters do not apply to a single ID.
+  Print only the recorded request or response body with:
+    comm100-accounts traces <id> --req-body
+    comm100-accounts traces <id> --resp-body
+
+  Print a curl replay with comm100-accounts traces <id> --curl; this does not execute it.
+  When run, the generated command obtains fresh session cookies through comm100-accounts login
+  and reads the recorded request body through --req-body. Append quoted curl options with:
+    comm100-accounts traces <id> --curl "-k --compressed"
+
+  The extension captures same-origin /api/* fetch and asynchronous XHR calls from /ui/ dashboards,
+  excluding /api/login/*. Reproduce the browser action to capture new requests.
+  The latest 5,000 exchanges are retained locally. Reading traces works while Chrome is closed.
+  Initial bridge setup requires comm100-accounts setup, then reloading the extension in Chrome.
+
+list/login/tokens read/write through the extension service worker; Chrome must be running.
 Only setup reads a temporary database snapshot. JWTs are stored with accounts in Chrome storage.
 Only command results go to stdout. Errors go to stderr. No browser cookies are changed.
 `;
