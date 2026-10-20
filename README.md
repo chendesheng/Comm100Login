@@ -81,6 +81,7 @@ comm100-accounts traces --from=24h
 comm100-accounts traces --from=1h30m
 comm100-accounts traces 42
 comm100-accounts traces 42 --curl
+comm100-accounts traces 42 --curl "-k"
 ```
 
 `list` prints unique rows ordered by dashboard, then site id, then email, in `siteId`, email, domain
@@ -165,7 +166,11 @@ so they can be copied out. Piped output is plain, `NO_COLOR` and `TERM=dumb` tur
 replays it as-is: `-sS` keeps curl's progress meter quiet while errors still print, and it sends
 every recorded header except `Host`, `Content-Length`, `Cookie` and `Authorization`, the request
 body as `--data-raw "$(comm100-accounts traces <id> --req-body)"`, and the session from
-`-b "$(comm100-accounts login <id> --siteId=… --cookie)"`. `traces <id> --req-body` prints only the
+`-b "$(comm100-accounts login <id> --siteId=… --cookie)"`. Append curl arguments with
+`traces <id> --curl "-k"` or `--curl "-k --compressed"`; the quoted text is appended verbatim
+to the generated command. `--curl="-k"` also works, and bare `--curl` adds no extra arguments.
+Use the equals form for a curl argument that is also a CLI option, such as `--curl="--help"`.
+`traces <id> --req-body` prints only the
 request body, byte-exact and uncolored, so it can be captured that way; a bodyless exchange prints
 nothing, and the replay then omits `--data-raw` entirely. One credential is enough — the cookie
 authenticates the same APIs as the bearer, so refreshing both would only duplicate it. The `<id>` is

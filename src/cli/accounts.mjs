@@ -22,7 +22,7 @@ const help = `Usage:
   comm100-accounts login <email_or_agent_id> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
   comm100-accounts traces [--domain=HOST] [--siteId=ID] [--method=METHOD[,METHOD]] [--from=TIMESTAMP_OR_DURATION]
-  comm100-accounts traces <id> [--curl | --req-body]
+  comm100-accounts traces <id> [--curl ["ARGS"] | --req-body]
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
 
@@ -47,6 +47,7 @@ Options:
   --siteId=ID            Restrict to a site
   --cookie              Print session cookies for curl -b instead of the JWT (login only)
   --show-password       Include a 20-character password column after email (list only)
+  --curl ["ARGS"]       Print a curl replay, appending optional quoted curl arguments (traces only)
   --profile=PATH_OR_NAME  Chrome profile directory (default: Chrome's Default profile)
   --db=PATH              Extension LevelDB directory; overrides profile discovery
   --help                 Show this help
@@ -265,13 +266,34 @@ export function resolveFrom(value, now = Date.now()) {
 }
 
 export async function run(args, { stdout = process.stdout, request = requestBridge } = {}) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
+  const options = {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
     from: { type: 'string' }, method: { type: 'string' },
     profile: { type: 'string' },
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     curl: { type: 'boolean' }, 'req-body': { type: 'boolean' }
-  } });
+  };
+  // parseArgs has no optional option values, and treats a separate "-k" as another option.
+  // Keep bare --curl working while accepting a quoted curl argument string or --curl=ARGS.
+  let curlArguments = '';
+  const normalizedArgs = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === '--') { normalizedArgs.push(...args.slice(index)); break; }
+    if (arg.startsWith('--curl=')) {
+      curlArguments = arg.slice('--curl='.length);
+      normalizedArgs.push('--curl');
+    } else if (arg === '--curl') {
+      const next = args[index + 1];
+      const cliOption = next?.split('=')[0];
+      curlArguments = next?.startsWith('-') && next !== '--' && next !== '-h' &&
+        !Object.hasOwn(options, cliOption.slice(2)) ? args[++index] : '';
+      normalizedArgs.push(arg);
+    } else {
+      normalizedArgs.push(arg);
+    }
+  }
+  const { values, positionals } = parseArgs({ args: normalizedArgs, allowPositionals: true, options });
   if (values.help || !positionals.length) { stdout.write(help); return; }
   const [command, argument] = positionals;
   const limits = { login: 2, traces: 2 }[command] || 1;
@@ -317,7 +339,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
         if (trace.requestBody) stdout.write(trace.requestBody.endsWith('\n') ? trace.requestBody : `${trace.requestBody}\n`);
         return;
       }
-      stdout.write(values.curl ? formatCurlTrace(trace) : formatHttpTrace(trace, { color: wantsColor(stdout) }));
+      stdout.write(values.curl ? formatCurlTrace(trace, curlArguments) : formatHttpTrace(trace, { color: wantsColor(stdout) }));
       return;
     }
     const from = values.from === undefined ? undefined : resolveFrom(values.from);

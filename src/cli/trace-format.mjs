@@ -83,7 +83,7 @@ function loginCommand(trace) {
  * the cookies come from `comm100-accounts login` at replay time; that session is enough on its own,
  * so the recorded bearer is dropped rather than also refreshed.
  */
-export function formatCurlTrace(trace) {
+export function formatCurlTrace(trace, extraArguments = '') {
   const parts = [`curl -sS -X ${trace.method}`, shellQuote(trace.url)];
   for (const [name, value] of headers(trace.requestHeaders)) {
     if (CURL_OMITS.has(String(name).toLowerCase())) continue;
@@ -91,6 +91,7 @@ export function formatCurlTrace(trace) {
   }
   parts.push(`-b "$(${loginCommand(trace)} --cookie)"`);
   if (trace.requestBody) parts.push(`--data-raw "$(comm100-accounts traces ${trace.id} --req-body)"`);
+  if (extraArguments) parts.push(extraArguments);
   return parts
     .map((part, index) => `${index ? '  ' : ''}${part}${index === parts.length - 1 ? '' : ' \\'}`)
     .join('\n') + '\n';

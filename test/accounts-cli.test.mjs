@@ -698,6 +698,16 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
     ''
   ].join('\n'));
 
+  // Exercise the executable's parser too: quoted flag strings arrive as one argv entry.
+  for (const curlArgs of [['--curl', '-k'], ['--curl=-k'], ['--curl', '-k --compressed']]) {
+    const { stdout, stderr } = await execute(process.execPath, [binary, 'traces', '1', ...curlArgs]);
+    assert.equal(stdout, replay.text().trimEnd() + ' \\\n  ' + (curlArgs.at(-1).includes('compressed') ? '-k --compressed' : '-k') + '\n');
+    assert.equal(stderr, '');
+  }
+  const bareBeforeId = capture();
+  await run(['traces', '--curl', '1'], bareBeforeId);
+  assert.equal(bareBeforeId.text(), replay.text());
+
   const body = capture();
   await run(['traces', '1', '--req-body'], body);
   assert.equal(body.text(), '{"a":1}\n');
