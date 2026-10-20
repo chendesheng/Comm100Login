@@ -112,10 +112,12 @@ export function formatHttpTrace(trace, { color = false } = {}) {
     paint(STYLE.version, 'HTTP/1.1')
   ].join(' ');
   // `Host` is not recorded (browsers forbid setting it), so it is rebuilt from the URL instead.
+  // The bearer is dropped like in the curl replay: it is a stale credential, and printing it to a
+  // terminal would only leak it.
   const requestHead = [
     requestLine,
     `${paint(STYLE.header, 'Host')}: ${url.host}`,
-    ...lines(trace.requestHeaders, ['host'])
+    ...lines(trace.requestHeaders, ['host', 'authorization'])
   ].join('\n');
   const responseHead = [
     `${paint(STYLE.version, 'HTTP/1.1')} ${paint(statusStyle(trace.statusCode), statusLine(trace.statusCode))}`,

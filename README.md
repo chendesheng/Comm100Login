@@ -145,18 +145,20 @@ first. `ID` increases with every capture and is never reused; `TIME` is the capt
 ISO-8601 with milliseconds. Rows recorded before those columns existed print `-` for the time and
 sort last. The extension records same-origin `/api/*` `fetch` and asynchronous XHR calls made by
 `/ui/` dashboards (`/api/login/*` is excluded), and the native host stores the most recent 5,000
-exchanges with verbatim request and response headers and bodies — no redaction or truncation,
-ordered by capture time. The SQLite database is `traces.sqlite` in the CLI configuration directory
-(file mode `0600`, directory `0700`), or `COMM100_TRACES_DB` when set. `traces` reads that file
-directly, works while Chrome is closed, and prints nothing on stdout once the bridge is configured
-but no rows have been captured, and fails with the setup instruction when the bridge has never been
-configured. `--domain` keeps only rows whose request host matches (scheme and path are ignored, like
-the account filters), `--siteId` keeps rows carrying that `siteId` query value, `--method` keeps the
-listed HTTP methods (case-insensitive, comma separated for several), and `--from` sets an inclusive
-lower bound on the capture time: an ISO-8601 timestamp, or a duration counted back from
-now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>` prints that one
-exchange the way it looked on the wire: request line, `Host`, request headers and body, then the
-response status line, response headers and body. On a terminal that view is colored: method, version,
+exchanges with verbatim request and response headers and bodies — no redaction or truncation at
+capture or in storage, ordered by capture time. The SQLite database is `traces.sqlite` in the CLI
+configuration directory (file mode `0600`, directory `0700`), or `COMM100_TRACES_DB` when set.
+`traces` reads that file directly, works while Chrome is closed, and prints nothing on stdout once
+the bridge is configured but no rows have been captured, and fails with the setup instruction when
+the bridge has never been configured. `--domain` keeps only rows whose request host matches (scheme
+and path are ignored, like the account filters), `--siteId` keeps rows carrying that `siteId` query
+value, `--method` keeps the listed HTTP methods (case-insensitive, comma separated for several), and
+`--from` sets an inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration
+counted back from now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>`
+prints that one exchange the way it looked on the wire: request line, `Host`, request headers and
+body, then the response status line, response headers and body. The request `Authorization` header is
+left out — it holds a token that is stale by the time it is read, and printing it would leak it into
+scrollback — just as the `curl` replay omits it. On a terminal that view is colored: method, version,
 header names and a status colored by class, while header values and bodies stay exactly as recorded
 so they can be copied out. Piped output is plain, `NO_COLOR` and `TERM=dumb` turn color off, and
 `FORCE_COLOR=1` keeps it on through a pager. `traces <id> --curl` prints a `curl` command that

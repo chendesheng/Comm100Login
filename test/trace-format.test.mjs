@@ -44,6 +44,17 @@ test('the request line keeps the origin form and Host comes from the URL', () =>
   assert(!rendered.includes('spoofed.test'));
 });
 
+test('the recorded bearer is never shown in the raw view', () => {
+  const requestHeaders = [['Authorization', 'Bearer secret.token.value'], ['accept', 'application/json']];
+  const rendered = formatHttpTrace(exchange({ requestHeaders }));
+  assert(!rendered.includes('secret.token.value'));
+  assert(!/authorization/i.test(rendered));
+  assert(rendered.includes('accept: application/json'));
+  assert.equal(
+    formatHttpTrace(exchange({ requestHeaders }), { color: true }).replace(/\x1b\[[0-9;]*m/g, ''),
+    rendered);
+});
+
 test('color marks the request line, header names and status, and never the bodies', () => {
   const colored = formatHttpTrace(exchange(), { color: true });
   assert(colored.startsWith('\x1b[1;34mPOST\x1b[0m /api/thing?siteId=10010 \x1b[2mHTTP/1.1\x1b[0m\n'));

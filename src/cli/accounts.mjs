@@ -34,9 +34,10 @@ tokens Print shared JWTs and decoded headers/payloads as formatted JSON, includi
 traces Print captured API traces as ID, TIME, METHOD, STATUS, URL, newest first; --domain, --siteId,
        --method (one or more, comma separated) and --from (ISO-8601, or a duration back from now such
        as 30m or 24h) narrow the rows.
-       "traces <id>" prints that exchange's request and response as raw HTTP; --req-body prints only
-       the request body, and --curl prints a curl command that replays it with fresh credentials
-       from comm100-accounts login and the body from --req-body.
+       "traces <id>" prints that exchange's request and response as raw HTTP without the
+       Authorization header; --req-body prints only the request body, and --curl prints a curl
+       command that replays it with fresh credentials from comm100-accounts login and the body
+       from --req-body.
 setup  Register the native messaging bridge for the selected Chrome profile (one-time snapshot).
 extension-path Print the installed Chrome extension folder for "Load unpacked".
 
