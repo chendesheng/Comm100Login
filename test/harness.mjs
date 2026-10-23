@@ -290,6 +290,9 @@ const dropSession = async () => {
 // ------------------------------------------------------------ pure helpers
 console.log('\n-- host mapping --');
 check('route host for livechat6dash', api.routeHostFor(HOST) === 'livechat6route.testing.comm100dev.io', api.routeHostFor(HOST));
+check('route host for a LAN dashboard', api.routeHostFor('livechat6dash.comm100dev.io') === 'livechat6route.comm100dev.io');
+check('LAN route mapping normalizes URLs', api.routeHostFor('https://LiveChat3dash.comm100dev.io/ui/10008/') === 'livechat3route.comm100dev.io');
+check('LAN route mapping supports new namespaces', api.routeOriginFor('new-branchdash.comm100dev.io') === 'https://new-branchroute.comm100dev.io');
 check('route host for dash11.comm100.io', api.routeHostFor('dash11.comm100.io') === 'route.comm100.io');
 check('unsupported host returns null', api.routeHostFor('example.com') === null);
 check('registrable domain comm100dev.io', api.registrableDomain(HOST) === 'comm100dev.io');
@@ -312,6 +315,12 @@ check(
   knownPlatforms.map((p) => p.domain).filter((d, i, all) => all.indexOf(d) !== i)
 );
 check('every entry has an origin', knownPlatforms.every((p) => /^https?:\/\//.test(p.origin)));
+check(
+  'every LAN test dashboard uses its namespace route service',
+  knownPlatforms.filter((p) => p.group === 'lan' && p.hostname !== 'localhost').every((p) =>
+    api.routeOriginFor(p.domain) === p.origin.replace('dash.comm100dev.io', 'route.comm100dev.io')
+  )
+);
 check(
   'the testing and dev branches of one name stay distinct',
   platforms.platformDomainFor('livechat3dash.testing.comm100dev.io') !==

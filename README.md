@@ -482,6 +482,7 @@ The popup no longer renders the log — **Export activity** in the popup footer 
 
 ```
 livechat6dash.testing.comm100dev.io  ->  livechat6route.testing.comm100dev.io
+livechat6dash.comm100dev.io          ->  livechat6route.comm100dev.io
 *.comm100.io                         ->  route.comm100.io
 any other listed dashboard           ->  itself (staging; localhost routing is CLI-only)
 anything else                        ->  not supported, nothing happens

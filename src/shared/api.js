@@ -20,8 +20,7 @@
 
 import { platformForDomain, platformForHostname } from './platforms.js';
 
-const DASH_SUFFIX = 'dash.testing.comm100dev.io';
-const ROUTE_SUFFIX = 'route.testing.comm100dev.io';
+const TEST_DOMAINS = ['testing.comm100dev.io', 'comm100dev.io'];
 const PROD_ROUTE_HOST = 'route.comm100.io';
 
 /** Hostname only: strips a scheme, a port and any path. */
@@ -38,9 +37,12 @@ function bareHost(value) {
 export function routeHostFor(host) {
   const h = bareHost(host);
   if (!h) return null;
-  if (h.endsWith(DASH_SUFFIX)) {
-    // livechat6dash.testing.comm100dev.io -> livechat6route.testing.comm100dev.io
-    return h.slice(0, h.length - DASH_SUFFIX.length) + ROUTE_SUFFIX;
+  for (const domain of TEST_DOMAINS) {
+    const suffix = `dash.${domain}`;
+    if (h.endsWith(suffix)) {
+      // Preserve the namespace and domain for both WAN and LAN dashboards.
+      return h.slice(0, h.length - suffix.length) + `route.${domain}`;
+    }
   }
   if (h === PROD_ROUTE_HOST) return h;
   if (h === 'comm100.io' || h.endsWith('.comm100.io')) return PROD_ROUTE_HOST;
