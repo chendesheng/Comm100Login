@@ -63,6 +63,7 @@ export function registrableDomain(host) {
 export function isSupportedHost(host) {
   const h = bareHost(host);
   if (!h) return false;
+  if (h === 'app.livehelp100service.com') return true;
   if (h === 'comm100dev.io' || h.endsWith('.comm100dev.io')) return true;
   if (h === 'comm100.io' || h.endsWith('.comm100.io')) return true;
   if (h === 'comm100staging.com' || h.endsWith('.comm100staging.com')) return true;

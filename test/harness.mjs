@@ -302,13 +302,16 @@ for (const host of ['localhost', 'localhost:12050', '127.0.0.1', '127.0.0.1:3450
   check(`isSupportedHost excludes ${host}`, api.isSupportedHost(host) === false);
 }
 check('isSupportedHost accepts staging', api.isSupportedHost('dash11.comm100staging.com') === true);
+check('isSupportedHost accepts LiveHelp100', api.isSupportedHost('app.livehelp100service.com') === true);
+check('isSupportedHost rejects other LiveHelp100 hosts', api.isSupportedHost('other.livehelp100service.com') === false);
 
 // ------------------------------------------------------------ the dashboard list
 // Credentials are scoped per dashboard, so the list is load-bearing: a duplicate or unparseable
 // entry would make two dashboards share a credential, which is the bug this all exists to prevent.
 console.log('\n-- dashboard list --');
 const knownPlatforms = platforms.allPlatforms();
-check('the list parses to 29 dashboards', knownPlatforms.length === 29, knownPlatforms.length);
+check('the list parses to 30 dashboards', knownPlatforms.length === 30, knownPlatforms.length);
+check('LiveHelp100 uses its own origin', api.routeOriginFor('app.livehelp100service.com') === 'https://app.livehelp100service.com');
 check(
   'every credential scope is unique',
   new Set(knownPlatforms.map((p) => p.domain)).size === knownPlatforms.length,

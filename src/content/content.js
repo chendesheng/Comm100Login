@@ -7,7 +7,7 @@
 
   // Mirrors isSupportedHost() in shared/api.js — content scripts cannot import it. The manifest's
   // matches decide this first; this is the belt to that pair of braces.
-  const SUPPORTED_HOST = /(^|\.)(comm100dev\.io|comm100staging\.com|comm100\.io)$/i;
+  const SUPPORTED_HOST = /^(?:app\.livehelp100service\.com|(?:.*\.)?(?:comm100dev\.io|comm100staging\.com|comm100\.io))$/i;
   const TRACE_MESSAGE_MAX = 256 * 1024 * 1024;
   const hostname = location.hostname;
   if (!SUPPORTED_HOST.test(hostname)) return;

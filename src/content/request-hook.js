@@ -1,7 +1,7 @@
 /** Runs in the page's MAIN world at document_start, before the app captures fetch/XHR. */
 (() => {
   'use strict';
-  if (!/(^|\.)(comm100dev\.io|comm100staging\.com|comm100\.io)$/i.test(location.hostname)) return;
+  if (!/^(?:app\.livehelp100service\.com|(?:.*\.)?(?:comm100dev\.io|comm100staging\.com|comm100\.io))$/i.test(location.hostname)) return;
   if (window.__comm100RequestHook) return;
   window.__comm100RequestHook = true;
   if (!/^\/(?:ui(?:\/|$)|login\/?$|$)/i.test(location.pathname)) return;

@@ -17,7 +17,8 @@
   "host_permissions": [
     "https://*.comm100dev.io/*",
     "https://*.comm100.io/*",
-    "https://*.comm100staging.com/*"
+    "https://*.comm100staging.com/*",
+    "https://app.livehelp100service.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -28,7 +29,8 @@
       "matches": [
         "https://*.comm100dev.io/*",
         "https://*.comm100.io/*",
-        "https://*.comm100staging.com/*"
+        "https://*.comm100staging.com/*",
+        "https://app.livehelp100service.com/*"
       ],
       "js": ["src/content/request-hook.js"],
       "world": "MAIN",
@@ -39,7 +41,8 @@
       "matches": [
         "https://*.comm100dev.io/*",
         "https://*.comm100.io/*",
-        "https://*.comm100staging.com/*"
+        "https://*.comm100staging.com/*",
+        "https://app.livehelp100service.com/*"
       ],
       "js": [
         "src/content/content.js"

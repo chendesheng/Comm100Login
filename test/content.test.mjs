@@ -73,5 +73,5 @@ for (const host of ['localhost:12050', 'localhost:34500', '127.0.0.1:12050', '[:
 test('manifest grants no access to localhost or loopback pages', () => {
   const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   const patterns = [...manifest.host_permissions, ...manifest.content_scripts.flatMap((script) => script.matches)];
-  assert(patterns.every((pattern) => /^https:\/\/\*\.(comm100dev\.io|comm100staging\.com|comm100\.io)\/\*$/.test(pattern)));
+  assert(patterns.every((pattern) => pattern === 'https://app.livehelp100service.com/*' || /^https:\/\/\*\.(comm100dev\.io|comm100staging\.com|comm100\.io)\/\*$/.test(pattern)));
 });

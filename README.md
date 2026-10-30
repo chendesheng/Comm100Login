@@ -317,9 +317,9 @@ That distinction is the whole fix for "it keeps jumping to login": the sign-in A
 a token for a site the account does not belong to, and the panel then rejects it on every call and
 reloads itself. Refusing to guess is what makes it stop.
 
-A dashboard that has no route service of its own — `dash11.comm100staging.com`, and the local
+A dashboard without a known route-service mapping — `dash11.comm100staging.com`, `app.livehelp100service.com`, and the local
 dashboard — is routed to itself (`getByEmail` on its own origin). That is a best-effort fallback,
-not a verified convention like `{branch}dash` → `{branch}route`. **Neither has been verified live.**
+not a verified convention like `{branch}dash` → `{branch}route`. **These fallbacks have not been verified live.**
 
 ### The session cookie
 

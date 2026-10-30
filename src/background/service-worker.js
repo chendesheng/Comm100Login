@@ -1081,7 +1081,8 @@ const reauthHistory = new Map();
 const WATCHED_URLS = [
   'https://*.comm100dev.io/*',
   'https://*.comm100.io/*',
-  'https://*.comm100staging.com/*'
+  'https://*.comm100staging.com/*',
+  'https://app.livehelp100service.com/*'
 ];
 
 function watchApiResponses() {

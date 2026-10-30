@@ -43,6 +43,7 @@ export const lanTestPlatformsPrefixes = [
 ];
 
 export const productionPlatformsPrefixes = [
+  'https://app.livehelp100service.com',
   'https://dash11.comm100.io',
   'https://dash12.comm100.io',
   'https://dash13.comm100.io',
