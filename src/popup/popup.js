@@ -145,7 +145,7 @@ function setFilterOptions(select, allLabel, values, selected, labelFor) {
 }
 
 /**
- * Fills the two filters from what is actually saved.
+ * Includes the current supported dashboard even when it has no saved accounts.
  *
  * The site choices follow the dashboard choice: a site id only means something inside one dashboard,
  * so offering `10010` while a different dashboard is selected would be a filter that can only ever
@@ -155,7 +155,7 @@ function renderAccountFilters(accounts) {
   filterDomain = setFilterOptions(
     el('filter-domain'),
     'All dashboards',
-    [...new Set(accounts.map(accountDomainKey))].sort(byDomain),
+    [...new Set([...accounts.map(accountDomainKey), ...(defaultDomain() ? [defaultDomain()] : [])])].sort(byDomain),
     filterDomain,
     (value) => (value === store.FILTER_UNSCOPED ? 'any dashboard' : value)
   );
