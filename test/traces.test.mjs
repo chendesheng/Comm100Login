@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +29,28 @@ async function useTraceDatabase(t) {
   });
   return path;
 }
+
+test('closing the output pipe early exits cleanly', async (t) => {
+  await useTraceDatabase(t);
+  const writer = await openTraceWriter();
+  for (let index = 0; index < 1000; index++) {
+    writer.insert({ url: `https://example.test/api/${index}/${'x'.repeat(200)}`, method: 'GET', statusCode: 200, time: index });
+  }
+  writer.close();
+
+  const child = spawn(process.execPath, [binary, 'traces'], { env: process.env });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdout.once('data', () => child.stdout.destroy());
+  const [code, signal] = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (exitCode, exitSignal) => resolve([exitCode, exitSignal]));
+  });
+  assert.equal(signal, null);
+  assert.equal(code, 0, stderr);
+  assert.equal(stderr, '');
+});
 
 test('SQLite traces retain only the newest exchanges, by time, with exactly eight raw columns', async (t) => {
   const path = await useTraceDatabase(t);
