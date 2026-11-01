@@ -583,6 +583,46 @@ test('traces filters rows by --domain, --siteId and --from', async (t) => {
   }
 });
 
+test('traces --status accepts exact codes, families and comma-separated combinations', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-status-'));
+  const previous = process.env.COMM100_TRACES_DB;
+  process.env.COMM100_TRACES_DB = join(directory, 'traces.sqlite');
+  t.after(async () => {
+    if (previous === undefined) delete process.env.COMM100_TRACES_DB;
+    else process.env.COMM100_TRACES_DB = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+  const writer = await openTraceWriter();
+  for (const statusCode of [200, 201, 404, 500, 503]) {
+    writer.insert({ url: `https://a.test/api/${statusCode}?siteId=10001`, time: statusCode,
+      method: statusCode === 201 ? 'POST' : 'GET', statusCode,
+      requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  }
+  writer.close();
+  for (const [args, expected] of [
+    [['--status=200'], [200]],
+    [['--status', '500'], [500]],
+    [['--status=2xx'], [201, 200]],
+    [['--status=4xx'], [404]],
+    [['--status=2XX, 404,500'], [500, 404, 201, 200]],
+    [['--status=200,500'], [500, 200]],
+    [['--status=2xx', '--method=POST', '--domain=a.test', '--siteId=10001', '--from=1970-01-01T00:00:00.201Z'], [201]],
+    [['--status=401'], []]
+  ]) {
+    const output = capture();
+    await run(['traces', ...args], output);
+    const rows = output.text().trim().split('\n').slice(1);
+    assert.deepEqual(rows.map((row) => Number(row.trim().split(/\s+/)[3])), expected);
+  }
+  for (const status of ['20', '600', '6xx', '2x', '200-299', '200,,500', '2xx,', '200,invalid']) {
+    await assert.rejects(run(['traces', `--status=${status}`], capture()), /--status requires status codes/);
+  }
+  await assert.rejects(run(['traces', '--status='], capture()), /--status requires a non-empty value/);
+  for (const args of [['list'], ['tokens'], ['login', 'a@example.com']]) {
+    await assert.rejects(run([...args, '--status=200'], capture()), /--status is only supported by traces/);
+  }
+});
+
 test('traces --from accepts durations counted back from now', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-since-'));
   const previous = process.env.COMM100_TRACES_DB;
@@ -736,7 +776,8 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
 
   // An id selects exactly one row, so filters and extra arguments are refused rather than ignored.
   for (const args of [['traces', '0'], ['traces', 'abc'], ['traces', '1', '2'],
-    ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h'], ['traces', '1', '--method=GET']]) {
+    ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h'], ['traces', '1', '--method=GET'],
+    ['traces', '1', '--status=200']]) {
     await assert.rejects(run(args, capture()), /positive integer|does not accept|Use "list"/);
   }
 });

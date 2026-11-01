@@ -154,7 +154,10 @@ configuration directory (file mode `0600`, directory `0700`), or `COMM100_TRACES
 the bridge is configured but no rows have been captured, and fails with the setup instruction when
 the bridge has never been configured. `--domain` keeps only rows whose request host matches (scheme
 and path are ignored, like the account filters), `--siteId` keeps rows carrying that `siteId` query
-value, `--method` keeps the listed HTTP methods (case-insensitive, comma separated for several), and
+value, `--method` keeps the listed HTTP methods (case-insensitive, comma separated for several),
+`--status` keeps exact status codes or families (`200`, `500`, `2xx`, `4xx`; families range from
+`1xx` to `5xx`, case-insensitive). Combine status values with commas to match any of them, such as
+`comm100-accounts traces --status=2xx,404,500`. All listing filters can be combined, and
 `--from` sets an inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration
 counted back from now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>`
 prints that one exchange the way it looked on the wire: request line, `Host`, request headers and
