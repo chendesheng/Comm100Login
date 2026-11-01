@@ -41,7 +41,7 @@ Options:
   --siteId=ID            Restrict to a site
   --method=GET,POST      Filter by HTTP method, case-insensitive (traces only)
   --status=2xx,404,500   Filter by status code or family (1xx-5xx), comma-separated (traces only)
-  --from=TIME_OR_DURATION Filter by capture time, inclusive: ISO-8601, 30m, 24h or 1h30m (traces only)
+  --from=TIME_OR_DURATION Filter by capture time, inclusive: ISO-8601, 7d, 24h, 30m or 1d12h (traces only)
   --cookie              Print session cookies for curl -b instead of the JWT (login only)
   --show-password       Include a 20-character password column after email (list only)
   --curl ["ARGS"]       Print a curl replay, appending optional quoted curl arguments (traces only)
@@ -57,6 +57,7 @@ API traces:
     comm100-accounts traces --domain=livechat6dash.testing.comm100dev.io --siteId=10010 --method=GET,POST --from=30m
     comm100-accounts traces --from=2026-10-19T12:00:00Z
     comm100-accounts traces --from=1h30m
+    comm100-accounts traces --from=7d
     comm100-accounts traces --status=2xx,404,500
 
   Inspect one exchange as raw HTTP with comm100-accounts traces <id>.
@@ -270,21 +271,21 @@ export async function login(state, identifier, options, request = requestBridge)
 // UTC ISO-8601 keeps the newest-first trace rows comparable; rows stored before the column show "-".
 const traceTime = (time) => (time ? new Date(time).toISOString() : '-');
 
-const DURATION_UNITS = { h: 3_600_000, m: 60_000, s: 1_000 };
-const DURATION = /^(?:\d+[hms])+$/i;
+const DURATION_UNITS = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000 };
+const DURATION = /^(?:\d+[dhms])+$/i;
 
 /**
  * `--from` is either an absolute ISO-8601 timestamp or a duration counted back from now, so
- * `--from 30m` reads as "the last 30 minutes" and `--from 1h30m` as "the last 90 minutes".
+ * `--from 7d` reads as "the last seven days" and `--from 1h30m` as "the last 90 minutes".
  */
 export function resolveFrom(value, now = Date.now()) {
   if (DURATION.test(value)) {
     let elapsed = 0;
-    for (const [, amount, unit] of value.matchAll(/(\d+)([hms])/gi)) elapsed += Number(amount) * DURATION_UNITS[unit.toLowerCase()];
+    for (const [, amount, unit] of value.matchAll(/(\d+)([dhms])/gi)) elapsed += Number(amount) * DURATION_UNITS[unit.toLowerCase()];
     return now - elapsed;
   }
   const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) throw new Error('--from requires an ISO-8601 timestamp or a duration such as 30m or 24h.');
+  if (Number.isNaN(parsed)) throw new Error('--from requires an ISO-8601 timestamp or a duration such as 7d, 24h or 30m.');
   return parsed;
 }
 

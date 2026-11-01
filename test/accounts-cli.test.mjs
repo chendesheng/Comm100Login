@@ -575,10 +575,14 @@ test('traces filters rows by --domain, --siteId and --from', async (t) => {
   const now = Date.parse('2026-10-19T12:00:00Z');
   assert.equal(resolveFrom('30m', now), now - 30 * 60_000);
   assert.equal(resolveFrom('24h', now), now - 24 * 3_600_000);
+  assert.equal(resolveFrom('7d', now), now - 7 * 86_400_000);
+  assert.equal(resolveFrom('7D', now), resolveFrom('168h', now));
+  assert.equal(resolveFrom('1d12h30m10s', now), now - (86_400 + 43_200 + 1_800 + 10) * 1_000);
+  assert.equal(resolveFrom('0d', now), now);
   assert.equal(resolveFrom('1h30m10s', now), now - (3_600 + 1_800 + 10) * 1_000);
   assert.equal(resolveFrom('30m1h', now), now - (1_800 + 3_600) * 1_000);
   assert.equal(resolveFrom('2026-10-19T11:00:00Z', now), Date.parse('2026-10-19T11:00:00Z'));
-  for (const value of ['30', 'h', '24x', '1h 30m']) {
+  for (const value of ['30', 'h', '24x', '1h 30m', 'd', '-7d', '1.5d', '7dfoo']) {
     assert.throws(() => resolveFrom(value, now), /ISO-8601 timestamp or a duration/);
   }
 });
@@ -635,8 +639,13 @@ test('traces --from accepts durations counted back from now', async (t) => {
 
   const recent = Date.now() - 30 * 60_000;
   const stale = Date.now() - 3 * 3_600_000;
+  const sixDaysAgo = Date.now() - 6 * 86_400_000;
+  const eightDaysAgo = Date.now() - 8 * 86_400_000;
   const writer = await openTraceWriter();
-  for (const [url, time] of [['https://a.test/api/recent', recent], ['https://a.test/api/stale', stale]]) {
+  for (const [url, time] of [
+    ['https://a.test/api/recent', recent], ['https://a.test/api/stale', stale],
+    ['https://a.test/api/six-days', sixDaysAgo], ['https://a.test/api/eight-days', eightDaysAgo]
+  ]) {
     writer.insert({ url, time, method: 'GET', statusCode: 200,
       requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
   }
@@ -650,6 +659,8 @@ test('traces --from accepts durations counted back from now', async (t) => {
   assert.deepEqual(await urls('1h'), ['https://a.test/api/recent']);
   assert.deepEqual(await urls('1h30m'), ['https://a.test/api/recent']);
   assert.deepEqual(await urls('24h'), ['https://a.test/api/recent', 'https://a.test/api/stale']);
+  assert.deepEqual(await urls('7d'), ['https://a.test/api/recent', 'https://a.test/api/stale', 'https://a.test/api/six-days']);
+  assert.deepEqual(await urls('1d12h'), ['https://a.test/api/recent', 'https://a.test/api/stale']);
   assert.deepEqual(await urls('0m'), []);
   await assert.rejects(urls('30'), /ISO-8601 timestamp or a duration/);
 });

@@ -159,7 +159,8 @@ value, `--method` keeps the listed HTTP methods (case-insensitive, comma separat
 `1xx` to `5xx`, case-insensitive). Combine status values with commas to match any of them, such as
 `comm100-accounts traces --status=2xx,404,500`. All listing filters can be combined, and
 `--from` sets an inclusive lower bound on the capture time: an ISO-8601 timestamp, or a duration
-counted back from now (`30m`, `24h`, `1h30m`, combining hours, minutes and seconds). `traces <id>`
+counted back from now (`7d`, `24h`, `30m`, `1d12h`, combining days, hours, minutes and seconds;
+each day is 24 hours). `traces <id>`
 prints that one exchange the way it looked on the wire: request line, `Host`, request headers and
 body, then the response status line, response headers and body. The request `Authorization` header is
 left out — it holds a token that is stale by the time it is read, and printing it would leak it into
