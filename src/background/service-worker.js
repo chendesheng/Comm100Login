@@ -109,10 +109,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     try {
       switch (type) {
-        case 'pageMode':
-          await updateLoginPageRule(sender.tab?.id, sender.url);
-          sendResponse({ ok: true });
-          break;
         case 'requestSession':
           sendResponse(await requestSession(message, sender));
           break;
@@ -379,6 +375,9 @@ async function ensureAuth({
     ignoreCooldown
   })
     .then(async (result) => {
+      // Remove legacy host-wide rules before a request can use this site's session. Keep
+      // admission above synchronous so concurrent rejected requests share the same renewal.
+      await headerRulesReady;
       // Only outcomes that describe something happening are worth the activity log. "Nothing to do"
       // reasons repeat for as long as a sign-in page is open, and they would push the interesting
       // history out of a capped log — the refusal banner in the popup covers the one that matters.
@@ -387,8 +386,6 @@ async function ensureAuth({
       }
       if (result && result.ok && result.siteId) {
         await restoreSessionTracking(targetHost, result.siteId);
-        const jwt = await tokenFor(targetHost, result.siteId);
-        if (jwt) await publishSessionHeader(targetHost, jwt);
       }
       return result;
     })
@@ -604,7 +601,6 @@ async function runEnsureAuth({
     // the *site* this URL names — in which case signing in by hand is the answer, and it is the one
     // thing we deliberately do not do for the user.
     const elsewhere = Array.from(new Set(store.usableAccounts(state).map((a) => a.domain).filter(Boolean)));
-    const othersHere = urlSiteId ? store.otherSitesOn(state, targetHost, urlSiteId) : [];
     const refusal = {
       ok: false,
       reason: 'no-account',
@@ -612,7 +608,6 @@ async function runEnsureAuth({
       requestedSiteId: urlSiteId ? String(urlSiteId) : null,
       message: urlSiteId
         ? `No saved credential for site ${urlSiteId} on ${targetHost}.` +
-          (othersHere.length ? ` Saved here: ${othersHere.join(', ')}.` : '') +
           ' Sign in by hand once and it will be remembered.'
         : elsewhere.length
           ? `No saved account for ${targetHost}. Saved: ${elsewhere.join(', ')}`
@@ -803,12 +798,6 @@ async function logout(origin, host) {
 
   if (host) {
     await store.noteLogout(String(host).toLowerCase());
-    const ids = ruleIds.get(String(host).toLowerCase());
-    if (ids && chrome.declarativeNetRequest) {
-      await headerRulesReady;
-      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [ids.set, ids.allow] });
-      publishedHeaders.delete(String(host).toLowerCase());
-    }
     await setBadge(null);
   }
   const removed = await clearSessionCookies(origin);
@@ -1111,10 +1100,9 @@ function watchApiResponses() {
  * Deliberately empty of side effects.
  *
  * A failed request cannot be replayed, and the obvious next move — reloading the page — is exactly
- * the thing not to do: it throws away whatever the user was doing. With the CDP path the token is
- * attached before the request leaves, so a 401 should not happen in the first place; when it does
- * (the debugger is off, or absent) the fresh cookie is in the jar and the panel's *next* request
- * simply succeeds. The user retries when they are ready, not when we decide.
+ * the thing not to do: it throws away whatever the user was doing. The page request bridge
+ * attaches the token before sending and handles its own retry. This backstop restores the cookie
+ * for requests outside that bridge and leaves the page available for the user to retry.
  */
 function noteReauthComplete(host) {
   log('session restored for', host, '- leaving the page alone');
@@ -1320,8 +1308,6 @@ function watchNavigations() {
     const host = parsed.host.toLowerCase();
     if (!isSupportedHost(host) || !routeOriginFor(host)) return;
 
-    updateLoginPageRule(details.tabId, details.url).catch((err) => log('login page rule failed', err));
-
     // Remember deliberate trips to the sign-in page so the cookie watchdog does not undo a
     // sign-out the user just performed through the control panel.
     if (parsed.pathname === '/' || /^\/login(\/|$)/i.test(parsed.pathname)) {
@@ -1338,92 +1324,20 @@ function watchNavigations() {
   chrome.webNavigation.onHistoryStateUpdated?.addListener(onNavigate);
 }
 
-// ---------------------------------------------------------------- request header rewriting
+// ---------------------------------------------------------------- legacy header rule cleanup
 
-/**
- * Attaches the session to the panel's API calls.
- *
- * The control panel authenticates with `Authorization: Bearer <token>` (its repositories call
- * `sendHttpRequest({ auth: this.token })`), so re-planting the cookie alone is not enough — the
- * panel keeps sending whatever token it already had, and every call 401s no matter what is in the
- * cookie jar. `declarativeNetRequest` lets us substitute the header on the way out.
- *
- * This replaced a `chrome.debugger`/CDP implementation. That approach could not attach while
- * DevTools was open — which is exactly how a cookie gets cleared by hand — and when it failed it
- * said so only on a console nobody was reading. DNR needs no attach, shows no infobar, and works
- * whether or not DevTools is running.
- *
- * The panel's sign-in endpoints must not carry a stale bearer, so a higher-priority `allow` rule
- * exempts them.
- */
+// Authorization is supplied by the page's fetch/XHR bridge, scoped to the URL's site. A rule
+// shared by every API request on a host can overwrite that token with another site's bearer.
+// Keep DNR access only to remove rules persisted by earlier extension versions.
 const DNR_RULE_BASE = 90000;
-const ruleIds = new Map(); // host -> { set, allow }
-const publishedHeaders = new Map();
-
-// Session rules support tabIds; dynamic host rules cannot distinguish a login tab from /ui.
-const loginRuleUpdates = new Map();
-function updateLoginPageRule(tabId, url) {
-  if (tabId == null || tabId < 0) return Promise.resolve();
-  const id = 1000000 + tabId;
-  const task = (loginRuleUpdates.get(tabId) || Promise.resolve()).catch(() => {}).then(async () => {
-    const addRules = isLoginPage(url) ? [{ id, priority: 3, action: { type: 'allow' },
-      condition: { tabIds: [tabId], resourceTypes: ['xmlhttprequest'] } }] : [];
-    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id], addRules });
-  });
-  loginRuleUpdates.set(tabId, task);
-  task.finally(() => {
-    if (loginRuleUpdates.get(tabId) === task) loginRuleUpdates.delete(tabId);
-  }).catch(() => {});
-  return task;
-}
-
-function rulesFor(host) {
-  let ids = ruleIds.get(host);
-  if (!ids) {
-    const base = DNR_RULE_BASE + ruleIds.size * 2;
-    ids = { allow: base, set: base + 1 };
-    ruleIds.set(host, ids);
-  }
-  return ids;
-}
-
-async function publishSessionHeader(host, jwt) {
-  if (!chrome.declarativeNetRequest || !jwt) return;
-  await headerRulesReady;
-  if (publishedHeaders.get(host) === jwt) return;
-  const { set, allow } = rulesFor(host);
-  const rules = [
-    {
-      id: allow,
-      priority: 2,
-      action: { type: 'allow' },
-      condition: { urlFilter: `||${host}/api/login/`, resourceTypes: ['xmlhttprequest'] }
-    },
-    {
-      id: set,
-      priority: 1,
-      action: {
-        type: 'modifyHeaders',
-        requestHeaders: [{ header: 'authorization', operation: 'set', value: `Bearer ${jwt}` }]
-      },
-      condition: { urlFilter: `||${host}/api/`, resourceTypes: ['xmlhttprequest'],
-        excludedInitiatorDomains: ['localhost', '127.0.0.1', '[::1]'] }
-    }
-  ];
-  try {
-    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [set, allow], addRules: rules });
-    publishedHeaders.set(host, jwt);
-    note('header-rule', `Authorization attached to ${host}/api/*`);
-  } catch (err) {
-    note('header-rule', `FAILED for ${host}: ${(err && err.message) || err}`);
-    log('could not publish the header rule for', host, err);
-  }
-}
 
 /** Dynamic rules survive a reload but our bookkeeping does not, so start from a clean slate. */
 async function resetHeaderRules() {
   if (!chrome.declarativeNetRequest) return;
   try {
+    const sessionRules = await chrome.declarativeNetRequest.getSessionRules();
+    const legacyAllows = sessionRules.filter((rule) => rule.id >= 1000000).map((rule) => rule.id);
+    if (legacyAllows.length) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: legacyAllows });
     const existing = await chrome.declarativeNetRequest.getDynamicRules();
     const ours = existing.filter((rule) => rule.id >= DNR_RULE_BASE).map((rule) => rule.id);
     if (ours.length) await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: ours });

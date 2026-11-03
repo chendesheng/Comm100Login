@@ -128,8 +128,15 @@
     if (busy || !isDashboardPath()) return;
     busy = true;
     try {
-      await send({ type: 'ensureAuth', hostname, domain, url: location.href,
+      const requestedUrl = location.href;
+      const result = await send({ type: 'ensureAuth', hostname, domain, url: requestedUrl,
         siteId: location.pathname.match(/^\/ui\/(\d+)(?:\/|$)/i)?.[1] || null });
+      if (location.href === requestedUrl && result?.ok === false &&
+          ['no-account', 'site-mismatch', 'no-route'].includes(result.reason)) {
+        const login = new URL('/login', location.origin);
+        login.searchParams.set('retUrl', requestedUrl);
+        location.replace(login.href);
+      }
     } finally {
       busy = false;
     }
@@ -141,7 +148,6 @@
   function onRouteChange() {
     if (previousUrl === location.href) return;
     previousUrl = location.href;
-    send({ type: 'pageMode' });
     authenticate();
   }
   for (const method of ['pushState', 'replaceState']) {

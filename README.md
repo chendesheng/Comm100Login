@@ -432,8 +432,7 @@ have since been deleted rather than left behind, since neither could ever run.
 A `chrome.debugger` + CDP `Fetch` implementation was written next, on the reasoning that a paused
 request can be resumed with rewritten headers without any policy. It was also removed: it cannot
 attach while **DevTools is open** — which is exactly how a cookie gets cleared by hand — and when it
-failed it said so only on a console nobody was reading. The `declarativeNetRequest` approach below
-needs no attach, no permission prompt worth worrying about, and no policy.
+failed it said so only on a console nobody was reading. The page request bridge below requires no debugger attachment.
 
 ### Attaching the session to the panel's API calls
 
@@ -442,33 +441,25 @@ The control panel authenticates with **`Authorization: Bearer <token>`** — its
 panel goes on sending whatever token it already had, every call 401s, and *that* is what makes it
 reload itself. Cookie state is irrelevant to those calls.
 
-So a `declarativeNetRequest` rule substitutes the header on the way out:
+The MAIN-world fetch/XHR hook asks the extension worker for a session before sending a same-origin
+API request. The worker selects credentials for the page's dashboard host and `/ui/{siteId}/` site,
+then returns that site's JWT. The hook sets the Authorization header on that request and can renew
+and retry once after a 401.
 
-```js
-{ id, priority: 1, action: { type: 'modifyHeaders', requestHeaders: [
-    { header: 'authorization', operation: 'set', value: `Bearer ${jwt}` } ] },
-  condition: { urlFilter: `||${host}/api/`, resourceTypes: ['xmlhttprequest'] } }
-```
+If the URL names a site with no matching credential, the worker refuses the automatic login and
+returns no token. The request retains the app's original headers, and the content script opens
+`/login` with the requested URL in `retUrl`. Login pages remain manual.
+Two tabs on the same host can use different sites without replacing each other's bearer tokens.
 
-Plus a higher-priority `allow` rule for `||{host}/api/login/`, so the sign-in calls are never handed
-a stale bearer. The rule is republished whenever a session is established or renewed, and dropped on
-install/startup (dynamic rules outlive the service worker, the bookkeeping that owns them does not).
-
-Only `/api/` XHRs are touched. Navigations are never paused, held, or rewritten — that was tried and
-removed, because it was the one change capable of making Chrome or the server respond unexpectedly.
-
-**Two earlier attempts, both dead ends worth recording:**
-
-- *Policy-installed extension for `webRequestBlocking`* — Chrome refuses off-store force-install on
-  a machine that is not MDM-enrolled.
-- *`chrome.debugger` + CDP `Fetch`* — cannot attach while **DevTools is open**, which is exactly how
-  a cookie gets cleared by hand, and it failed silently. DNR needs no attach, shows no infobar, and
-  works whether or not DevTools is running.
+Earlier versions also installed a host-wide `declarativeNetRequest` bearer rule. That rule could
+attach site B's token to site A's requests even after the worker refused to log in for site A.
+Host-wide bearer rules are no longer installed; the DNR permission is retained to remove persisted
+rules from earlier versions when the worker starts.
 
 ### Activity log
 
 The worker keeps a rolling log of what it decided and why — `cookie-removed`, `sign-in ->
-ok`/`-> bad-credentials`/`-> api-error`, `header-rule -> Authorization attached to …`, and `401`.
+ok`/`-> bad-credentials`/`-> api-error`, and `401`.
 
 It exists because "it still reloads" was being diagnosed by guesswork across several rounds. That log
 is what finally showed the truth: dozens of `/api/` calls returning 401 with **no interception

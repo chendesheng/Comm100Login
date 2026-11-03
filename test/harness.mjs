@@ -24,8 +24,16 @@ const staticResponseListeners = [];
 const tabReloads = [];
 const beforeSendHeaderListeners = [];
 const beforeRequestListeners = [];
-const dynamicRules = [];
-const sessionRules = [];
+const dynamicRules = [
+  { id: 90001, priority: 1, action: { type: 'modifyHeaders', requestHeaders: [
+    { header: 'authorization', operation: 'set', value: 'Bearer legacy-other-site' }
+  ] }, condition: { urlFilter: '||livechat6dash.testing.comm100dev.io/api/', resourceTypes: ['xmlhttprequest'] } },
+  { id: 1, action: { type: 'allow' }, condition: { urlFilter: '||unrelated.example/' } }
+];
+const sessionRules = [
+  { id: 1000001, action: { type: 'allow' }, condition: { tabIds: [1] } },
+  { id: 2, action: { type: 'allow' }, condition: { tabIds: [2] } }
+];
 let openTabs = [];
 const historyListeners = [];
 
@@ -75,6 +83,7 @@ globalThis.chrome = {
     create: async (props) => { tabCreates.push({ ...props }); }
   },
   declarativeNetRequest: {
+    getSessionRules: async () => structuredClone(sessionRules),
     updateSessionRules: async ({ removeRuleIds = [], addRules = [] }) => {
       for (const id of removeRuleIds) {
         const at = sessionRules.findIndex((rule) => rule.id === id);
@@ -781,31 +790,19 @@ for (const fn of webRequestListeners) {
 await new Promise((r) => setTimeout(r, 400));
 check('a page is never reloaded by the 401 path', tabReloads.length === 0 && tabUpdates.length === 0, { tabReloads, tabUpdates });
 
-// ------------------------------------------------------------ session header rewriting
-console.log('\n-- DNR header rewriting --');
+// ------------------------------------------------------------ site-scoped request authentication
+console.log('\n-- site-scoped request authentication --');
 
 await storage.clearAll();
 await armAccount('RefreshToken1');
 await dropSession();
-
-// A successful sign-in must publish a rule attaching the bearer to the panel's API calls; without
-// it the panel keeps sending its own stale token and every call 401s, which is what makes it reload.
 const signIn = await call({ type: 'ensureAuth', hostname: HOST, siteId: SITE_ID, force: true });
 check('a sign-in succeeds', signIn && signIn.ok === true, signIn);
-
-const setRule = dynamicRules.find(
-  (rule) => rule.action && rule.action.type === 'modifyHeaders' && rule.condition.urlFilter.endsWith('/api/')
-);
-check('a header rule is published', Boolean(setRule), dynamicRules);
-check('  ... scoped to this host\'s API', setRule && setRule.condition.urlFilter === `||${HOST}/api/`, setRule && setRule.condition.urlFilter);
-check('  ... only for XHR', setRule && setRule.condition.resourceTypes.join() === 'xmlhttprequest', setRule && setRule.condition.resourceTypes);
-const header = setRule && setRule.action.requestHeaders[0];
-check('  ... setting Authorization', header && header.header === 'authorization' && header.operation === 'set', header);
-check('  ... to a bearer token', header && /^Bearer \S+\.\S+\.\S+$/.test(header.value), header && header.value);
-
-const allowRule = dynamicRules.find((rule) => rule.action && rule.action.type === 'allow');
-check('sign-in endpoints are exempted', allowRule && allowRule.condition.urlFilter === `||${HOST}/api/login/`, allowRule);
-check('  ... with a higher priority', allowRule && setRule && allowRule.priority > setRule.priority);
+check('old host-wide bearer rules are removed and never republished',
+  !dynamicRules.some((rule) => rule.action.type === 'modifyHeaders'));
+check('old login-tab exemptions are removed', !sessionRules.some((rule) => rule.id >= 1000000));
+check('unrelated dynamic and session rules survive cleanup',
+  dynamicRules.some((rule) => rule.id === 1) && sessionRules.some((rule) => rule.id === 2));
 
 check('nothing in the extension can reload a page', tabReloads.length === 0 && tabUpdates.length === 0, { tabReloads, tabUpdates });
 
@@ -816,15 +813,11 @@ await storage.clearFailures(HOST);
 await dropSession();
 const staleToggle = await call({ type: 'canAutoLogin', hostname: HOST, siteId: SITE_ID });
 check('a stale autoLogin:false no longer disables anything', staleToggle && staleToggle.reason !== 'disabled', staleToggle);
-check('  ... and the header rule is left in place', dynamicRules.length > 0, dynamicRules);
 const staleAuth = await call({ type: 'ensureAuth', hostname: HOST, siteId: SITE_ID, force: true });
 check('  ... and a sign-in still runs', staleAuth && staleAuth.ok === true, staleAuth && staleAuth.reason);
 
 const kinds = ((await storage.getState()).events || []).map((event) => event.kind);
 check('the activity log records sign-ins', kinds.includes('sign-in'), kinds.slice(0, 6));
-check('the header rule still uses the current session token', dynamicRules.some((rule) =>
-  rule.action?.requestHeaders?.[0]?.value === `Bearer ${jar.get(`${COOKIE_DOMAIN}|/|token_${SITE_ID}`)?.value}`));
-
 // ------------------------------------------------------------ account selection
 console.log('\n-- recency selection --');
 await storage.clearAll();
@@ -918,7 +911,7 @@ const wrongSite = await call({
 });
 check('ensureAuth refuses a site it has no credential for', wrongSite && wrongSite.ok === false && wrongSite.reason === 'no-account', wrongSite);
 check('  ... naming the site that is missing', String(wrongSite && wrongSite.requestedSiteId) === FOREIGN_SITE, wrongSite && wrongSite.requestedSiteId);
-check('  ... pointing at what is saved instead', new RegExp(`site ${SITE_ID}\\b`).test((wrongSite && wrongSite.message) || ''), wrongSite && wrongSite.message);
+check('  ... without listing other saved accounts', !wrongSite.message.includes('Saved here:') && !wrongSite.message.includes(TARGET_EMAIL), wrongSite.message);
 check('  ... and never calls the login API', loginCalls === 0, { loginCalls });
 // The popup explains the silence from this record, so a refusal that is not written is a refusal the
 // user cannot see.
@@ -928,6 +921,54 @@ check('  ... naming the site that is missing', String(refusalRecord.lastRefusal?
 
 const wrongPeek = await call({ type: 'canAutoLogin', hostname: HOST, domain: HOST, siteId: FOREIGN_SITE });
 check('the pre-flight refuses it too, so the form is not covered', wrongPeek && wrongPeek.eligible === false && wrongPeek.reason === 'no-account', wrongPeek);
+
+// Refusing a login must also prevent a previously signed-in site's bearer from reaching the API.
+// Model the host URL-filter rules Chrome applies after the page's fetch/XHR hook has run.
+function authorizationAfterRules(url, initial = null) {
+  const applicable = dynamicRules.filter((rule) => {
+    const filter = rule.condition.urlFilter;
+    return filter?.startsWith('||') && url.startsWith(`https://${filter.slice(2)}`);
+  }).sort((a, b) => b.priority - a.priority);
+  let authorization = initial;
+  for (const rule of applicable) {
+    if (rule.action.type === 'allow') break;
+    for (const header of rule.action.requestHeaders || []) {
+      if (header.header === 'authorization' && header.operation === 'set') authorization = header.value;
+    }
+  }
+  return authorization;
+}
+const ownPage = `https://${HOST}/ui/${SITE_ID}/ai/dashboard/`;
+const foreignPage = `https://${HOST}/ui/${FOREIGN_SITE}/ai/dashboard/`;
+const ownJwt = fakeJwt(Math.floor(Date.now() / 1000) + 3600, { siteId: SITE_ID });
+await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/',
+  name: `token_${SITE_ID}`, value: ownJwt });
+const ownSender = { tab: { id: 701, url: ownPage }, url: ownPage, frameId: 0 };
+const foreignSender = { tab: { id: 702, url: foreignPage }, url: foreignPage, frameId: 0 };
+const ownRequest = await call({ type: 'requestSession', url: `https://${HOST}/api/data?siteId=${SITE_ID}` }, ownSender);
+check('the saved site receives its own bearer', ownRequest.ok && ownRequest.jwt === ownJwt, ownRequest);
+for (const [pageUrl, suffix] of [[foreignPage, ''], [foreignPage, `?siteId=${FOREIGN_SITE}`],
+  [`https://${HOST}/ui/1/ai/dashboard/`, '?siteId=1']]) {
+  const url = `https://${HOST}/api/data${suffix}`;
+  const foreignRequest = await call({ type: 'requestSession', url }, { ...foreignSender, url: pageUrl,
+    tab: { ...foreignSender.tab, url: pageUrl } });
+  check('the unsaved site receives no session from the request bridge', !foreignRequest.ok && !foreignRequest.jwt, foreignRequest);
+  check('the unsaved site API request receives no bearer from another site',
+    authorizationAfterRules(url) === null);
+}
+
+// A second saved site must not replace the bearer supplied for the first tab's request.
+const foreignAccount = await storage.upsertAccount({ email: 'second-site@example.com', password: 'RefreshToken1', host: HOST, domain: HOST });
+await storage.markSuccess({ accountId: foreignAccount, host: HOST, domain: HOST,
+  site: { siteId: FOREIGN_SITE, portalUrl: `https://${HOST}` } });
+const foreignJwt = fakeJwt(Math.floor(Date.now() / 1000) + 3600, { siteId: FOREIGN_SITE });
+await chrome.cookies.set({ url: `https://${HOST}`, domain: COOKIE_DOMAIN, path: '/',
+  name: `token_${FOREIGN_SITE}`, value: foreignJwt });
+const secondRequest = await call({ type: 'requestSession', url: `https://${HOST}/api/data` }, foreignSender);
+check('a second saved site receives its own bearer', secondRequest.ok && secondRequest.jwt === foreignJwt, secondRequest);
+check('the second tab cannot overwrite the first tab bearer in transit',
+  authorizationAfterRules(`https://${HOST}/api/data`, `Bearer ${ownRequest.jwt}`) === `Bearer ${ownJwt}`);
+await chrome.cookies.remove({ url: `https://${HOST}`, name: `token_${FOREIGN_SITE}` });
 
 // A credential with no site recorded is the one case worth trying: it has never signed in here, so
 // the URL's claim is checked against the route service instead of being trusted outright.
@@ -1318,8 +1359,7 @@ for (const path of ['/', '/login', '/login/', `/login?retUrl=${encodeURIComponen
   check(`${path}: navigation, API requests and alarm do not sign in`,
     !automatic.ok && !intercepted.ok && loginCalls === beforeRequests &&
     !await chrome.cookies.get({ url: `https://${HOST}`, name: `token_${SITE_ID}` }));
-  check('login tab is exempt from automatic Authorization rewriting', sessionRules.some((rule) =>
-    rule.priority > 2 && rule.action.type === 'allow' && rule.condition.tabIds.includes(501)));
+  check('login pages have no automatic Authorization rule', !dynamicRules.some((rule) => rule.action.type === 'modifyHeaders'));
 }
 // The five-second sign-out guard must not be the only thing preventing cookie restoration.
 const originalNow = Date.now;
@@ -1335,7 +1375,7 @@ check('explicit popup login still works from the login page', explicit.ok, expli
 currentTabUrl = `https://${HOST}/ui/${SITE_ID}/entry/`;
 for (const fn of historyListeners) fn({ tabId: 501, frameId: 0, url: currentTabUrl });
 await sleepForCookieChecks();
-check('SPA navigation back to the dashboard removes the login exemption', !sessionRules.some((rule) => rule.condition.tabIds.includes(501)));
+check('SPA navigation back to the dashboard creates no host-wide bearer rule', !dynamicRules.some((rule) => rule.action.type === 'modifyHeaders'));
 await dropSession();
 const dashboard = await call({ type: 'requestSession', url: `https://${HOST}/api/data` },
   { tab: { id: 501, url: currentTabUrl }, url: currentTabUrl, frameId: 0 });
@@ -1359,8 +1399,7 @@ await sleepForCookieChecks();
 check('localhost authentication and request bridge are unsupported', localAuth.reason === 'unsupported-host' && !localRequest.ok);
 check('saved localhost accounts do not trigger automatic sign-in', loginCalls === beforeRequests);
 check('localhost does not publish header rewriting rules', !dynamicRules.some((rule) => rule.condition.urlFilter.includes('localhost')));
-check('remote API token rules exclude localhost initiators', dynamicRules.filter((rule) => rule.action.type === 'modifyHeaders')
-  .every((rule) => ['localhost', '127.0.0.1', '[::1]'].every((host) => rule.condition.excludedInitiatorDomains.includes(host))));
+check('remote API calls cannot inherit an automatic host-wide bearer', !dynamicRules.some((rule) => rule.action.type === 'modifyHeaders'));
 await armAccount('SlowLogin1');
 await dropSession();
 beforeRequests = loginCalls;

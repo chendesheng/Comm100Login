@@ -7,9 +7,10 @@ const source = readFileSync(new URL('../src/content/content.js', import.meta.url
 const origin = 'https://livechat3dash.testing.comm100dev.io';
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-function setup(path) {
+function setup(path, response = { ok: true, jwt: 'fresh', entryUrl: `${origin}/ui/10008/entry/` }) {
   const location = new URL(path, origin);
-  location.replace = () => assert.fail('content script must never redirect from login');
+  const redirects = [];
+  location.replace = (url) => { redirects.push(url); location.href = url; };
   const window = new EventTarget();
   const document = new EventTarget();
   const fields = { email: { value: 'manual@example.com' }, password: { value: 'manual-password' } };
@@ -22,11 +23,11 @@ function setup(path) {
     (_state, _title, url) => { location.href = new URL(url, location.href).href; }]));
   const chrome = { runtime: { sendMessage(message, callback) {
     messages.push(message);
-    callback({ ok: true, jwt: 'fresh', entryUrl: `${origin}/ui/10008/entry/` });
+    callback(typeof response === 'function' ? response(message) : response);
   } } };
   vm.runInNewContext(source, { window, document, location, history, chrome, URL, queueMicrotask,
     setInterval: (fn) => { polls.push(fn); } });
-  return { window, document, location, history, messages, replies, polls, fields };
+  return { window, document, location, history, messages, replies, polls, fields, redirects };
 }
 
 for (const path of ['/', '/login', '/login/', '/login?retUrl=%2Fui%2F10008%2Fentry%2F']) {
@@ -34,7 +35,7 @@ for (const path of ['/', '/login', '/login/', '/login?retUrl=%2Fui%2F10008%2Fent
     const page = setup(path);
     await settle();
     page.polls.forEach((fn) => fn());
-    assert.deepEqual(page.messages.map((message) => message.type), ['pageMode']);
+    assert.deepEqual(page.messages, []);
     assert.equal(page.fields.email.value, 'manual@example.com');
     assert.equal(page.fields.password.value, 'manual-password');
     const event = new Event('message');
@@ -55,6 +56,43 @@ for (const path of ['/', '/login', '/login/', '/login?retUrl=%2Fui%2F10008%2Fent
     await settle();
     page.polls.forEach((fn) => fn());
     assert.equal(page.messages.filter((message) => message.type === 'ensureAuth').length, 1);
+    assert.deepEqual(page.redirects, []);
+  });
+}
+
+for (const reason of ['no-account', 'site-mismatch', 'no-route']) {
+  test(`${reason} opens manual login and preserves the requested site URL`, async () => {
+    const path = '/ui/1/ai/dashboard/?view=all#details';
+    const page = setup(path, { ok: false, reason });
+    await settle();
+    assert.equal(page.redirects.length, 1);
+    const login = new URL(page.redirects[0]);
+    assert.equal(login.origin, origin);
+    assert.equal(login.pathname, '/login');
+    assert.equal(login.searchParams.get('retUrl'), `${origin}${path}`);
+    page.polls.forEach((fn) => fn());
+    await settle();
+    assert.equal(page.messages.filter((message) => message.type === 'ensureAuth').length, 1);
+    assert.equal(page.redirects.length, 1);
+  });
+}
+
+test('a refused request does not redirect a page the user has already left', async () => {
+  let page;
+  page = setup('/login', () => {
+    page.location.href = `${origin}/ui/10008/entry/`;
+    return { ok: false, reason: 'no-account' };
+  });
+  page.history.pushState({}, '', '/ui/1/ai/dashboard/');
+  await settle();
+  assert.deepEqual(page.redirects, []);
+});
+
+for (const response of [null, { ok: false, reason: 'cooldown' }, { ok: false, reason: 'exception' }]) {
+  test(`a transient authentication result stays on the dashboard: ${response?.reason || 'no response'}`, async () => {
+    const page = setup('/ui/10008/entry/', response);
+    await settle();
+    assert.deepEqual(page.redirects, []);
   });
 }
 
