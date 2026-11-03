@@ -2,6 +2,7 @@ import { isSupportedHost, routeOriginFor } from '../shared/api.js';
 import * as store from '../shared/storage.js';
 
 const el = (id) => document.getElementById(id);
+el('version').textContent = `v${chrome.runtime.getManifest().version}`;
 
 /**
  * Tailwind classes for the DOM this script builds, and the tones the status/session lines switch

@@ -318,7 +318,11 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     }
   }
   const { values, positionals } = parseArgs({ args: normalizedArgs, allowPositionals: true, options });
-  if (values.help || !positionals.length) { stdout.write(help); return; }
+  if (values.help || !positionals.length) {
+    const { version } = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
+    stdout.write(`Comm100 Auto Login v${version}\n\n${help}`);
+    return;
+  }
   const [command, argument] = positionals;
   const limits = { login: 2, traces: 2 }[command] || 1;
   if (!['list', 'login', 'tokens', 'traces', 'setup', 'extension-path'].includes(command) ||

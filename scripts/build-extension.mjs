@@ -2,9 +2,16 @@ import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
 const destination = new URL('extension/', root);
-const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
+const manifestPath = new URL('manifest.json', root);
+const manifestSource = await readFile(manifestPath, 'utf8');
+const manifest = JSON.parse(manifestSource);
 const metadata = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
-manifest.version = metadata.version;
+if (manifest.version !== metadata.version) {
+  manifest.version = metadata.version;
+  // Keep both the source checkout and the packaged extension on the npm package version.
+  await writeFile(manifestPath, manifestSource.replace(/("version"\s*:\s*")[^"]+(")/,
+    (_match, prefix, suffix) => `${prefix}${metadata.version}${suffix}`));
+}
 
 // Only browser runtime files belong in the unpacked extension. In particular, do not copy
 // node_modules, CLI code, account exports, development tools, or local browser state.
