@@ -222,6 +222,32 @@ test('trace filters narrow by HTTP method', async (t) => {
   assert.deepEqual(await listTraces({ method: 'PUT, PATCH' }), []);
 });
 
+test('trace status filters match exact codes and families, preserving order and other filters', async (t) => {
+  await useTraceDatabase(t);
+  const writer = await openTraceWriter();
+  const codes = [0, 100, 199, 200, 201, 299, 300, 399, 400, 404, 499, 500, 503, 599];
+  for (const statusCode of codes) {
+    writer.insert({ url: `https://a.test/api/${statusCode}?siteId=10010`, time: statusCode,
+      method: statusCode === 201 ? 'POST' : 'GET', statusCode,
+      requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  }
+  writer.close();
+  const statuses = async (status, filters = {}) => (await listTraces({ status, ...filters })).map((row) => row.statusCode);
+  assert.deepEqual(await statuses('200'), [200]);
+  assert.deepEqual(await statuses('500'), [500]);
+  assert.deepEqual(await statuses('1xx'), [199, 100]);
+  assert.deepEqual(await statuses('2xx'), [299, 201, 200]);
+  assert.deepEqual(await statuses('3xx'), [399, 300]);
+  assert.deepEqual(await statuses('4xx'), [499, 404, 400]);
+  assert.deepEqual(await statuses('5xx'), [599, 503, 500]);
+  assert.deepEqual(await statuses('2XX, 404, 500'), [500, 404, 299, 201, 200]);
+  assert.deepEqual(await statuses('200,2xx,200'), [299, 201, 200]);
+  assert.deepEqual(await statuses([200, '4xx']), [499, 404, 400, 200]);
+  assert.deepEqual(await statuses('2xx', { domain: 'a.test', siteId: '10010', method: 'post', from: 201 }), [201]);
+  assert.deepEqual(await statuses('2xx', { method: 'POST', from: 202 }), []);
+  assert.deepEqual(await statuses('401'), []);
+});
+
 test('missing trace databases list as empty', async (t) => {
   await useTraceDatabase(t);
   assert.deepEqual(await listTraces(), []);

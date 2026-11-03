@@ -21,7 +21,7 @@ const help = `Usage:
   comm100-accounts list [--domain=HOST] [--siteId=ID] [--show-password]
   comm100-accounts login <email_or_agent_id> [--domain=HOST] [--siteId=ID] [--cookie]
   comm100-accounts tokens [--domain=HOST] [--siteId=ID]
-  comm100-accounts traces [--domain=HOST] [--siteId=ID] [--method=METHOD[,METHOD]] [--from=TIMESTAMP_OR_DURATION]
+  comm100-accounts traces [--domain=HOST] [--siteId=ID] [--method=METHOD[,METHOD]] [--status=CODE[,CODE]] [--from=TIMESTAMP_OR_DURATION]
   comm100-accounts traces <id> [--curl ["ARGS"] | --req-body | --resp-body]
   comm100-accounts setup [--profile=PATH_OR_NAME]
   comm100-accounts extension-path
@@ -40,7 +40,8 @@ Options:
                         only when multiple site IDs match
   --siteId=ID            Restrict to a site
   --method=GET,POST      Filter by HTTP method, case-insensitive (traces only)
-  --from=TIME_OR_DURATION Filter by capture time, inclusive: ISO-8601, 30m, 24h or 1h30m (traces only)
+  --status=2xx,404,500   Filter by status code or family (1xx-5xx), comma-separated (traces only)
+  --from=TIME_OR_DURATION Filter by capture time, inclusive: ISO-8601, 7d, 24h, 30m or 1d12h (traces only)
   --cookie              Print session cookies for curl -b instead of the JWT (login only)
   --show-password       Include a 20-character password column after email (list only)
   --curl ["ARGS"]       Print a curl replay, appending optional quoted curl arguments (traces only)
@@ -52,10 +53,12 @@ Options:
 
 API traces:
   Run comm100-accounts traces to list ID, UTC TIME, METHOD, STATUS and URL, newest first.
-  Combine --domain, --siteId, --method and --from to narrow the list, for example:
+  Combine --domain, --siteId, --method, --status and --from to narrow the list, for example:
     comm100-accounts traces --domain=livechat6dash.testing.comm100dev.io --siteId=10010 --method=GET,POST --from=30m
     comm100-accounts traces --from=2026-10-19T12:00:00Z
     comm100-accounts traces --from=1h30m
+    comm100-accounts traces --from=7d
+    comm100-accounts traces --status=2xx,404,500
 
   Inspect one exchange as raw HTTP with comm100-accounts traces <id>.
   The request Authorization header is omitted. Listing filters do not apply to a single ID.
@@ -268,28 +271,28 @@ export async function login(state, identifier, options, request = requestBridge)
 // UTC ISO-8601 keeps the newest-first trace rows comparable; rows stored before the column show "-".
 const traceTime = (time) => (time ? new Date(time).toISOString() : '-');
 
-const DURATION_UNITS = { h: 3_600_000, m: 60_000, s: 1_000 };
-const DURATION = /^(?:\d+[hms])+$/i;
+const DURATION_UNITS = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000 };
+const DURATION = /^(?:\d+[dhms])+$/i;
 
 /**
  * `--from` is either an absolute ISO-8601 timestamp or a duration counted back from now, so
- * `--from 30m` reads as "the last 30 minutes" and `--from 1h30m` as "the last 90 minutes".
+ * `--from 7d` reads as "the last seven days" and `--from 1h30m` as "the last 90 minutes".
  */
 export function resolveFrom(value, now = Date.now()) {
   if (DURATION.test(value)) {
     let elapsed = 0;
-    for (const [, amount, unit] of value.matchAll(/(\d+)([hms])/gi)) elapsed += Number(amount) * DURATION_UNITS[unit.toLowerCase()];
+    for (const [, amount, unit] of value.matchAll(/(\d+)([dhms])/gi)) elapsed += Number(amount) * DURATION_UNITS[unit.toLowerCase()];
     return now - elapsed;
   }
   const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) throw new Error('--from requires an ISO-8601 timestamp or a duration such as 30m or 24h.');
+  if (Number.isNaN(parsed)) throw new Error('--from requires an ISO-8601 timestamp or a duration such as 7d, 24h or 30m.');
   return parsed;
 }
 
 export async function run(args, { stdout = process.stdout, request = requestBridge } = {}) {
   const options = {
     domain: { type: 'string' }, siteId: { type: 'string' }, db: { type: 'string' },
-    from: { type: 'string' }, method: { type: 'string' },
+    from: { type: 'string' }, method: { type: 'string' }, status: { type: 'string' },
     profile: { type: 'string' },
     cookie: { type: 'boolean' }, 'show-password': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     curl: { type: 'boolean' }, 'req-body': { type: 'boolean' }, 'resp-body': { type: 'boolean' }
@@ -333,6 +336,10 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
   if (values.method !== undefined && !/^[A-Za-z]+(?:\s*,\s*[A-Za-z]+)*$/.test(values.method)) {
     throw new Error('--method requires HTTP methods such as GET or POST, separated by commas.');
   }
+  if (values.status !== undefined && command !== 'traces') throw new Error('--status is only supported by traces.');
+  if (values.status !== undefined && !/^[1-5](?:\d{2}|xx)(?:\s*,\s*[1-5](?:\d{2}|xx))*$/i.test(values.status)) {
+    throw new Error('--status requires status codes such as 200 or families such as 2xx (1xx-5xx), separated by commas.');
+  }
   if (command === 'extension-path') {
     if (Object.keys(values).length) throw new Error('extension-path does not accept account or profile options.');
     stdout.write(extensionPath() + '\n');
@@ -354,8 +361,8 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
     if (argument !== undefined) {
       if (!/^[1-9]\d*$/.test(argument)) throw new Error('Trace id must be a positive integer.');
       if (values.domain !== undefined || values.siteId !== undefined || values.from !== undefined ||
-          values.method !== undefined) {
-        throw new Error('traces <id> prints one exchange and does not accept --domain, --siteId, --method or --from.');
+          values.method !== undefined || values.status !== undefined) {
+        throw new Error('traces <id> prints one exchange and does not accept --domain, --siteId, --method, --status or --from.');
       }
       const trace = await readTrace(Number(argument));
       if (!trace) throw new Error(`No trace with id ${argument}.`);
@@ -376,7 +383,7 @@ export async function run(args, { stdout = process.stdout, request = requestBrid
       return;
     }
     const from = values.from === undefined ? undefined : resolveFrom(values.from);
-    const rows = await listTraces({ domain: values.domain, siteId: values.siteId, method: values.method, from });
+    const rows = await listTraces({ domain: values.domain, siteId: values.siteId, method: values.method, status: values.status, from });
     if (rows.length) {
       const header = `${'ID'.padEnd(4)} ${'TIME'.padEnd(24)} ${'METHOD'.padEnd(7)} ${'STATUS'.padEnd(7)} URL`;
       const lines = rows.map((row) =>

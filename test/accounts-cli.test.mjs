@@ -575,11 +575,55 @@ test('traces filters rows by --domain, --siteId and --from', async (t) => {
   const now = Date.parse('2026-10-19T12:00:00Z');
   assert.equal(resolveFrom('30m', now), now - 30 * 60_000);
   assert.equal(resolveFrom('24h', now), now - 24 * 3_600_000);
+  assert.equal(resolveFrom('7d', now), now - 7 * 86_400_000);
+  assert.equal(resolveFrom('7D', now), resolveFrom('168h', now));
+  assert.equal(resolveFrom('1d12h30m10s', now), now - (86_400 + 43_200 + 1_800 + 10) * 1_000);
+  assert.equal(resolveFrom('0d', now), now);
   assert.equal(resolveFrom('1h30m10s', now), now - (3_600 + 1_800 + 10) * 1_000);
   assert.equal(resolveFrom('30m1h', now), now - (1_800 + 3_600) * 1_000);
   assert.equal(resolveFrom('2026-10-19T11:00:00Z', now), Date.parse('2026-10-19T11:00:00Z'));
-  for (const value of ['30', 'h', '24x', '1h 30m']) {
+  for (const value of ['30', 'h', '24x', '1h 30m', 'd', '-7d', '1.5d', '7dfoo']) {
     assert.throws(() => resolveFrom(value, now), /ISO-8601 timestamp or a duration/);
+  }
+});
+
+test('traces --status accepts exact codes, families and comma-separated combinations', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'comm100-traces-status-'));
+  const previous = process.env.COMM100_TRACES_DB;
+  process.env.COMM100_TRACES_DB = join(directory, 'traces.sqlite');
+  t.after(async () => {
+    if (previous === undefined) delete process.env.COMM100_TRACES_DB;
+    else process.env.COMM100_TRACES_DB = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+  const writer = await openTraceWriter();
+  for (const statusCode of [200, 201, 404, 500, 503]) {
+    writer.insert({ url: `https://a.test/api/${statusCode}?siteId=10001`, time: statusCode,
+      method: statusCode === 201 ? 'POST' : 'GET', statusCode,
+      requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
+  }
+  writer.close();
+  for (const [args, expected] of [
+    [['--status=200'], [200]],
+    [['--status', '500'], [500]],
+    [['--status=2xx'], [201, 200]],
+    [['--status=4xx'], [404]],
+    [['--status=2XX, 404,500'], [500, 404, 201, 200]],
+    [['--status=200,500'], [500, 200]],
+    [['--status=2xx', '--method=POST', '--domain=a.test', '--siteId=10001', '--from=1970-01-01T00:00:00.201Z'], [201]],
+    [['--status=401'], []]
+  ]) {
+    const output = capture();
+    await run(['traces', ...args], output);
+    const rows = output.text().trim().split('\n').slice(1);
+    assert.deepEqual(rows.map((row) => Number(row.trim().split(/\s+/)[3])), expected);
+  }
+  for (const status of ['20', '600', '6xx', '2x', '200-299', '200,,500', '2xx,', '200,invalid']) {
+    await assert.rejects(run(['traces', `--status=${status}`], capture()), /--status requires status codes/);
+  }
+  await assert.rejects(run(['traces', '--status='], capture()), /--status requires a non-empty value/);
+  for (const args of [['list'], ['tokens'], ['login', 'a@example.com']]) {
+    await assert.rejects(run([...args, '--status=200'], capture()), /--status is only supported by traces/);
   }
 });
 
@@ -595,8 +639,13 @@ test('traces --from accepts durations counted back from now', async (t) => {
 
   const recent = Date.now() - 30 * 60_000;
   const stale = Date.now() - 3 * 3_600_000;
+  const sixDaysAgo = Date.now() - 6 * 86_400_000;
+  const eightDaysAgo = Date.now() - 8 * 86_400_000;
   const writer = await openTraceWriter();
-  for (const [url, time] of [['https://a.test/api/recent', recent], ['https://a.test/api/stale', stale]]) {
+  for (const [url, time] of [
+    ['https://a.test/api/recent', recent], ['https://a.test/api/stale', stale],
+    ['https://a.test/api/six-days', sixDaysAgo], ['https://a.test/api/eight-days', eightDaysAgo]
+  ]) {
     writer.insert({ url, time, method: 'GET', statusCode: 200,
       requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '' });
   }
@@ -610,6 +659,8 @@ test('traces --from accepts durations counted back from now', async (t) => {
   assert.deepEqual(await urls('1h'), ['https://a.test/api/recent']);
   assert.deepEqual(await urls('1h30m'), ['https://a.test/api/recent']);
   assert.deepEqual(await urls('24h'), ['https://a.test/api/recent', 'https://a.test/api/stale']);
+  assert.deepEqual(await urls('7d'), ['https://a.test/api/recent', 'https://a.test/api/stale', 'https://a.test/api/six-days']);
+  assert.deepEqual(await urls('1d12h'), ['https://a.test/api/recent', 'https://a.test/api/stale']);
   assert.deepEqual(await urls('0m'), []);
   await assert.rejects(urls('30'), /ISO-8601 timestamp or a duration/);
 });
@@ -736,7 +787,8 @@ test('traces <id> prints one exchange as raw HTTP and rejects filters', async (t
 
   // An id selects exactly one row, so filters and extra arguments are refused rather than ignored.
   for (const args of [['traces', '0'], ['traces', 'abc'], ['traces', '1', '2'],
-    ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h'], ['traces', '1', '--method=GET']]) {
+    ['traces', '1', '--siteId=10010'], ['traces', '1', '--from=1h'], ['traces', '1', '--method=GET'],
+    ['traces', '1', '--status=200']]) {
     await assert.rejects(run(args, capture()), /positive integer|does not accept|Use "list"/);
   }
 });

@@ -177,10 +177,20 @@ function parseMethods(method) {
   return values.length ? new Set(values) : null;
 }
 
+/** `--status` accepts exact codes and families such as 2xx, separated by commas. */
+function parseStatuses(status) {
+  if (status === undefined || status === FILTER_ANY) return null;
+  const values = (Array.isArray(status) ? status : String(status).split(','))
+    .map((value) => String(value).trim().toLowerCase())
+    .filter(Boolean);
+  return values.length ? new Set(values) : null;
+}
+
 /** The trace-side counterpart of `filterAccounts`: a dashboard is the URL host, a site is a query value. */
-function keepsTrace(row, { domain, siteId, methods, from }) {
+function keepsTrace(row, { domain, siteId, methods, statuses, from }) {
   if (from !== undefined && !(row.time >= from)) return false;
   if (methods && !methods.has(row.method)) return false;
+  if (statuses && !statuses.has(String(row.statusCode)) && !statuses.has(`${Math.floor(row.statusCode / 100)}xx`)) return false;
   if (domain === FILTER_ANY && siteId === FILTER_ANY) return true;
   let url;
   try {
@@ -247,8 +257,9 @@ function parseHeaders(value) {
   }
 }
 
-export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, method = FILTER_ANY, from } = {}) {
+export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, method = FILTER_ANY, status = FILTER_ANY, from } = {}) {
   const methods = parseMethods(method);
+  const statuses = parseStatuses(status);
   const path = traceDatabasePath();
   try {
     await stat(path);
@@ -263,7 +274,7 @@ export async function listTraces({ domain = FILTER_ANY, siteId = FILTER_ANY, met
     db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;');
     const columns = db.prepare('PRAGMA table_info(traces)').all().map((column) => column.name);
     statement = db.prepare(listQuery(columns));
-    return statement.all().filter((row) => keepsTrace(row, { domain, siteId, methods, from }));
+    return statement.all().filter((row) => keepsTrace(row, { domain, siteId, methods, statuses, from }));
   } catch (error) {
     if (String(error?.message).includes('no such table: traces')) return [];
     throw error;
