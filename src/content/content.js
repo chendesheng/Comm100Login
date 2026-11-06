@@ -58,6 +58,12 @@
     const data = event.data;
     if (event.source !== window || event.origin !== location.origin ||
         data?.source !== 'comm100-request-hook') return;
+    if (data.type === 'partner-login') {
+      if (!/^(?:partner\.comm100staging\.com|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?partner\.(?:testing\.)?comm100dev\.io)$/i.test(hostname)) return;
+      void send({ type: 'capturePartnerLogin', url: data.url, email: data.email,
+        password: data.password, response: data.response });
+      return;
+    }
     if (data.type === 'api-trace') {
       const trace = data.trace;
       if (!trace || typeof trace !== 'object') return;

@@ -14,7 +14,8 @@
  * the account lockout threshold.
  */
 
-import { agentIdFromToken } from './cookies.js';
+import { isPartnerHost } from './platforms.js';
+import { agentIdFromToken, jwtPayload } from './cookies.js';
 
 const KEY = 'comm100AutoLogin';
 
@@ -133,23 +134,31 @@ export const saveToken = (record) => mutate((state) => {
   const account = state.accounts.find((a) => a.id === record.accountId);
   const domain = normalizeDomain(record.domain);
   const siteId = normalizeSiteId(record.siteId);
+  const partner = isPartnerHost(domain);
+  const partnerId = normalizeSiteId(record.partnerId);
+  const validScope = partner
+    ? !siteId && partnerId && String(jwtPayload(record.jwtToken)?.partnerId) === partnerId &&
+      (!account?.partnerId || String(account.partnerId) === partnerId)
+    : siteId;
   if (!account || normalizeEmail(account.email) !== normalizeEmail(record.email) ||
-      (account.domain && normalizeDomain(account.domain) !== domain) || !domain || !siteId ||
+      (account.domain && normalizeDomain(account.domain) !== domain) || !domain || !validScope ||
       (account.siteId && String(account.siteId) !== siteId) ||
       typeof record.jwtToken !== 'string' || !record.jwtToken) {
     throw new Error('Token does not match a saved account and dashboard/site.');
   }
   const token = {
     accountId: account.id, email: account.email, domain, siteId,
+    ...(partner ? { partnerId } : {}),
     agentId: agentIdFromToken(record.jwtToken) || account.agentId || null,
     jwtToken: record.jwtToken, expireTime: record.expireTime || null, savedAt: Date.now()
   };
   account.domain ||= domain;
-  account.siteId ||= siteId;
+  if (partner) account.partnerId = partnerId;
+  else account.siteId ||= siteId;
   // The token names the agent, so the account keeps its id next to the email that was typed.
   if (token.agentId) account.agentId = token.agentId;
   state.tokens = state.tokens.filter((entry) => !(entry.accountId === account.id &&
-    entry.domain === domain && String(entry.siteId) === siteId));
+    entry.domain === domain && String(entry.siteId) === String(siteId)));
   state.tokens.push(token);
   return token;
 });

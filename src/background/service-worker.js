@@ -22,7 +22,8 @@ import {
   registrableDomain,
   routeOriginFor
 } from '../shared/api.js';
-import { platformDomainFor } from '../shared/platforms.js';
+import { capturePartnerLogin, ensurePartnerAuth, logoutPartner, partnerSession, verifyPartnerAccount } from './partner-session.js';
+import { isPartnerHost, platformDomainFor } from '../shared/platforms.js';
 import {
   TOKEN_RE,
   agentIdFromToken,
@@ -83,7 +84,7 @@ function rememberSession(host, siteId, expiresAt, jwt = null) {
 
 /** Read the current cookie; a cached token can outlive a manual sign-in or cookie replacement. */
 async function tokenFor(host, siteId) {
-  const name = tokenCookieName(siteId);
+  const name = isPartnerHost(host) ? 'partnerToken' : tokenCookieName(siteId);
   const cookie = await getCookie(dashboardOriginFor(host), name);
   return cookie && cookie.value ? cookie.value : null;
 }
@@ -111,6 +112,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       switch (type) {
         case 'requestSession':
           sendResponse(await requestSession(message, sender));
+          break;
+        case 'capturePartnerLogin':
+          sendResponse(isPartnerHost(new URL(sender.url).host) ? await capturePartnerLogin(message, sender) : { ok: false });
           break;
         case 'captureTrace':
           sendResponse(captureTrace(message, sender));
@@ -222,7 +226,7 @@ async function requestSession(message, sender) {
   if (message.rejectedToken && jwt === message.rejectedToken) {
     const now = Date.now();
     const recent = (requestRenewals.get(page.host) || []).filter((at) => now - at < REAUTH_WINDOW_MS);
-    if (!inFlight.has(`${page.host}|${result.siteId}`)) {
+    if (!inFlight.has(`${page.host}|${result.partnerId || result.siteId}`)) {
       if (recent.length >= MAX_REAUTH_PER_WINDOW) return { ok: false, reason: 'retry-limit' };
       recent.push(now);
       requestRenewals.set(page.host, recent);
@@ -236,6 +240,7 @@ async function requestSession(message, sender) {
 
 async function sessionStatus(origin, siteId = null) {
   if (!origin) return { signedIn: false, reason: 'no-origin' };
+  if (isPartnerHost(origin)) return partnerSession(origin, siteId);
   const wanted = store.normalizeSiteId(siteId);
   if (wanted) {
     // Every branch shares one cookie domain, so "any token_* cookie" is a different branch's session
@@ -331,7 +336,8 @@ async function ensureAuth({
   minRemainingMs = 0,
   forceRefresh = false,
   rejectedToken = null,
-  ignoreCooldown = false
+  ignoreCooldown = false,
+  accountId = null
 }) {
   const targetHost = resolveDomain(domain, url, hostname || host);
   if (!targetHost) return { ok: false, reason: 'no-host' };
@@ -372,7 +378,8 @@ async function ensureAuth({
     minRemainingMs,
     forceRefresh,
     rejectedToken,
-    ignoreCooldown
+    ignoreCooldown,
+    accountId
   })
     .then(async (result) => {
       // Remove legacy host-wide rules before a request can use this site's session. Keep
@@ -384,7 +391,7 @@ async function ensureAuth({
       if (!QUIET_OUTCOMES.has(result && result.reason)) {
         note('sign-in', `${targetHost} -> ${result && result.ok ? 'ok' : (result && result.reason) || 'failed'}`);
       }
-      if (result && result.ok && result.siteId) {
+      if (result && result.ok && result.siteId && !isPartnerHost(targetHost)) {
         await restoreSessionTracking(targetHost, result.siteId);
       }
       return result;
@@ -589,8 +596,11 @@ async function runEnsureAuth({
   minRemainingMs = 0,
   forceRefresh = false,
   rejectedToken = null,
-  ignoreCooldown = false
+  ignoreCooldown = false,
+  accountId = null
 }) {
+  if (isPartnerHost(targetHost)) return ensurePartnerAuth({ targetHost, urlSiteId,
+    userInitiated, forceRefresh, rejectedToken, minRemainingMs, force, ignoreCooldown, accountId });
   const state = await store.getState();
   const settings = state.settings;
 
@@ -779,6 +789,7 @@ async function runEnsureAuth({
  */
 async function logout(origin, host) {
   if (!origin) return { ok: false, reason: 'no-origin' };
+  if (isPartnerHost(origin)) return logoutPartner(origin);
 
   let apiOk = false;
   let status = 0;
@@ -837,6 +848,7 @@ async function verifyAccount(accountId, fallbackHost) {
   // The account's own domain decides where to verify, not the tab the popup happens to be open on:
   // a credential can be added for a dashboard the user is not currently looking at.
   const targetDomain = store.normalizeDomain(account.domain) || store.normalizeDomain(fallbackHost);
+  if (isPartnerHost(targetDomain)) return verifyPartnerAccount(account, targetDomain);
   const routeBase = routeOriginFor(targetDomain);
   if (!routeBase) {
     await store.resolvePending({ accountId, ok: false });

@@ -18,7 +18,7 @@
  * `errorCode` / the presence of `jwtToken`, never on the HTTP status.
  */
 
-import { platformForDomain, platformForHostname } from './platforms.js';
+import { isPartnerHost, platformForDomain, platformForHostname } from './platforms.js';
 
 const TEST_DOMAINS = ['testing.comm100dev.io', 'comm100dev.io'];
 const PROD_ROUTE_HOST = 'route.comm100.io';
@@ -80,6 +80,7 @@ export function isSupportedHost(host) {
  * better than refusing to try. A dashboard that is not in the list at all still returns null.
  */
 export function routeOriginFor(host) {
+  if (isPartnerHost(host)) return `https://${bareHost(host)}`;
   const mapped = routeHostFor(host);
   if (mapped) return `https://${mapped}`;
   const platform = platformForHostname(host);
@@ -252,3 +253,12 @@ export const dashboardUrlFor = (portalUrl, siteId) => `${portalUrl}/ui/${siteId}
  */
 export const entryUrlFor = (portalUrl, siteId) =>
   `${String(portalUrl || '').replace(/\/+$/, '')}/ui/${siteId}/entry/?fromlogin=1`;
+
+/** Partner identities are scoped to a host and partner ID, without a dashboard site lookup. */
+export async function partnerLogin(origin, { email, password }) {
+  const response = await jsonFetch(`${origin.replace(/\/+$/, '')}/partnerloginapi/Login`, {
+    method: 'POST', body: { email: String(email), password: String(password) }
+  });
+  return { ...response, errorCode: response.errorCode ?? response.code,
+    errorMessage: response.errorMessage || response.message };
+}

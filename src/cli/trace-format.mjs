@@ -1,5 +1,6 @@
 /** Rendering of one stored exchange for the terminal. The rows keep raw headers and bodies. */
 
+import { isPartnerHost } from '../shared/platforms.js';
 import { agentIdFromToken } from '../shared/cookies.js';
 
 const REASONS = new Map([
@@ -73,7 +74,9 @@ function loginIdentifier(trace) {
 
 /** One login invocation per trace: the site id narrows the account the CLI has to pick. */
 function loginCommand(trace) {
-  const siteId = new URL(trace.url).searchParams.get('siteId') || '';
+  const url = new URL(trace.url);
+  if (isPartnerHost(url.host)) return `comm100-accounts login ${loginIdentifier(trace)} --domain=${url.host}`;
+  const siteId = url.searchParams.get('siteId') || '';
   return `comm100-accounts login ${loginIdentifier(trace)}${/^[\w.-]+$/.test(siteId) ? ` --siteId=${siteId}` : ''}`;
 }
 

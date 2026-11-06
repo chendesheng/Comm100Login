@@ -314,12 +314,25 @@ check('isSupportedHost accepts staging', api.isSupportedHost('dash11.comm100stag
 check('isSupportedHost accepts LiveHelp100', api.isSupportedHost('app.livehelp100service.com') === true);
 check('isSupportedHost rejects other LiveHelp100 hosts', api.isSupportedHost('other.livehelp100service.com') === false);
 
+// The same worker message validation accepts partner traces, including new namespaces.
+for (const partnerHost of ['new-branchpartner.testing.comm100dev.io', 'new-branchpartner.comm100dev.io', 'partner.comm100staging.com']) {
+  const origin = `https://${partnerHost}`;
+  const sender = { url: `${origin}/ui/10000/partner/dashboard/`, tab: { id: 1 }, frameId: 0 };
+  const trace = { url: `${origin}/api/entity/configs`, method: 'GET', statusCode: 200,
+    requestHeaders: [], requestBody: '', responseHeaders: [], responseBody: '{"ok":true}', time: Date.now() };
+  check('partner API trace passes worker validation', (await call({ type: 'captureTrace', trace }, sender)).ok);
+  check('partner login password is not traced', !(await call({ type: 'captureTrace',
+    trace: { ...trace, url: `${origin}/partnerloginapi/Login` } }, sender)).ok);
+  check('partner trace cannot cross hosts', !(await call({ type: 'captureTrace',
+    trace: { ...trace, url: 'https://otherpartner.comm100dev.io/api/data' } }, sender)).ok);
+}
+
 // ------------------------------------------------------------ the dashboard list
 // Credentials are scoped per dashboard, so the list is load-bearing: a duplicate or unparseable
 // entry would make two dashboards share a credential, which is the bug this all exists to prevent.
 console.log('\n-- dashboard list --');
 const knownPlatforms = platforms.allPlatforms();
-check('the list parses to 30 dashboards', knownPlatforms.length === 30, knownPlatforms.length);
+check('the list parses to 30 dashboards and 23 partner portals', knownPlatforms.length === 53, knownPlatforms.length);
 check('LiveHelp100 uses its own origin', api.routeOriginFor('app.livehelp100service.com') === 'https://app.livehelp100service.com');
 check(
   'every credential scope is unique',

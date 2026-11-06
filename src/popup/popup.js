@@ -495,9 +495,10 @@ async function loginNow(account, button) {
   const domain = account.domain || context.domain;
   const result = await send({
     type: 'ensureAuth',
+    accountId: account.id,
     hostname: context.host,
     domain,
-    siteId: store.normalizeSiteId(account.siteId) || null,
+    siteId: store.normalizeSiteId(account.partnerId || account.siteId) || null,
     force: true,
     userInitiated: true
   });

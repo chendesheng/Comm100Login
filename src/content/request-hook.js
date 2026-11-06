@@ -6,6 +6,26 @@
   window.__comm100RequestHook = true;
   if (!/^\/(?:ui(?:\/|$)|login\/?$|$)/i.test(location.pathname)) return;
 
+  const partnerHost = /^(?:partner\.comm100staging\.com|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?partner\.(?:testing\.)?comm100dev\.io)$/i.test(location.hostname);
+  function partnerLoginUrl(value) {
+    if (!partnerHost) return null;
+    try {
+      const url = new URL(value, location.href);
+      return url.origin === location.origin && url.pathname.toLowerCase() === '/partnerloginapi/login' ? url.href : null;
+    } catch { return null; }
+  }
+  function capturePartnerLogin(url, requestBody, responseBody, status) {
+    try {
+      const request = JSON.parse(requestBody);
+      const response = JSON.parse(responseBody);
+      if (status !== 200 || response.code !== 0 || !response.jwtToken || !request.email || !request.password) return;
+      window.postMessage({ source: 'comm100-request-hook', type: 'partner-login', url,
+        email: request.email, password: request.password,
+        response: { code: response.code, partnerId: response.partnerId,
+          jwtToken: response.jwtToken, expireTime: response.expireTime } }, location.origin);
+    } catch { /* observing login must never affect it */ }
+  }
+
   const nativeFetch = window.fetch;
   const xhr = window.XMLHttpRequest.prototype;
   const nativeOpen = xhr.open;
@@ -127,6 +147,20 @@
   }
 
   window.fetch = async function (input, init) {
+    const loginUrl = partnerLoginUrl(input instanceof Request ? input.url : input);
+    if (loginUrl) {
+      let sample;
+      try { sample = new Request(input, init).clone(); } catch { /* observation only */ }
+      const response = await nativeFetch.call(this, input, init);
+      if (sample) {
+        try {
+          const clone = response.clone();
+          void Promise.all([sample.text(), clone.text()]).then(([body, answer]) =>
+            capturePartnerLogin(loginUrl, body, answer, response.status)).catch(() => {});
+        } catch { /* observation only */ }
+      }
+      return response;
+    }
     const url = apiUrl(input instanceof Request ? input.url : input);
     if (!url) return nativeFetch.call(this, input, init);
     const request = new Request(input, init);
@@ -216,6 +250,10 @@
     else if (target.responseType === 'document') responseBody = target.response?.documentElement?.outerHTML ?? '';
     else responseBody = '';
     if (target.status === 0 && state.failure) responseBody = state.failure;
+    if (state.login) {
+      capturePartnerLogin(state.url, bodyText(state.body), responseBody, target.status);
+      return;
+    }
     sendTrace({
       url: state.url,
       method: state.method,
@@ -281,11 +319,12 @@
     const previous = requests.get(this);
     if (previous) previous.aborted = true;
     requests.delete(this);
-    const url = apiUrl(args[1]);
+    const login = partnerLoginUrl(args[1]);
+    const url = login || apiUrl(args[1]);
     // Synchronous XHR cannot await an extension message. Keep its native behavior.
     if (url && args[2] !== false) {
       listen(this);
-      requests.set(this, { url, openArgs: args, headers: [], sent: false,
+      requests.set(this, { url, login: Boolean(login), openArgs: args, headers: [], sent: false,
         method: String(args[0] || '').toUpperCase(), body: null, startedAt: 0, failure: null });
     }
     return nativeOpen.apply(this, args);
@@ -293,7 +332,7 @@
 
   xhr.setRequestHeader = function (name, value) {
     const state = requests.get(this);
-    if (!state) return nativeHeader.call(this, name, value);
+    if (!state || state.login) return nativeHeader.call(this, name, value);
     if (this.readyState !== 1 || state.sent) throw new DOMException('Request is not open', 'InvalidStateError');
     // Validate and normalize without setting the native header: native XHR appends duplicate
     // values, so applying the app's stale bearer now would prevent replacing it after renewal.
@@ -307,6 +346,10 @@
     if (state.sent || this.readyState !== 1) throw new DOMException('Request is not open', 'InvalidStateError');
     state.sent = true;
     state.body = body;
+    if (state.login) {
+      state.startedAt = Date.now();
+      return nativeSend.call(this, body);
+    }
     waitForSession(this, state).then((jwt) => {
       if (state.aborted || requests.get(this) !== state) return;
       state.jwt = jwt;

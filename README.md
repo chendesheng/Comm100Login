@@ -6,6 +6,30 @@ using the login HTTP API rather than the sign-in form. You get the dashboard, no
 It remembers multiple accounts — **one per dashboard** — and always uses the **most recently used**
 one for the site you are on.
 
+## Partner portals
+
+Partner accounts are supported on `{NAMESPACE}partner.testing.comm100dev.io` (WAN),
+`{NAMESPACE}partner.comm100dev.io` (LAN), and `partner.comm100staging.com` (staging). Sign in manually once to capture the credentials, or
+add an account under **Partner portals** in the popup. Successful manual sign-ins also cache the
+partner JWT without making another login request.
+
+`comm100-accounts list` includes partner accounts with their partner domain (the site column is
+`-`, because partner IDs are separate from dashboard site IDs). `login` selects the partner login
+API when the matched account belongs to a partner host. If an email exists on multiple portals,
+select one explicitly:
+
+```bash
+comm100-accounts login partner@example.com --domain=livechat6partner.testing.comm100dev.io
+comm100-accounts login partner@example.com --domain=livechat6partner.testing.comm100dev.io --cookie
+comm100-accounts traces --domain=livechat6partner.testing.comm100dev.io
+```
+
+Partner login posts only `email` and `password` to `/partnerloginapi/Login`; it does not use
+`--siteId` or the agent route service. `--cookie` returns `partnerToken=<JWT>`. Partner portal
+`/api/` fetch and XHR requests, including request/response bodies, appear in the same trace store
+and support `traces <id>`, `--req-body`, `--resp-body`, and `--curl`. Login credentials are captured
+as accounts; login requests are excluded from API traces, as they are for dashboards.
+
 ## Terminal account tool
 
 Requires Node.js 22.13+ or 23.4+. Install the CLI and bundled Chrome extension from npm:

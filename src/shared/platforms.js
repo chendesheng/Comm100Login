@@ -51,11 +51,24 @@ export const productionPlatformsPrefixes = [
   'https://dash17.comm100.io'
 ];
 
+/** WAN/LAN partners follow dashboard namespaces; staging has a dedicated host. */
+export const partnerPlatformsPrefixes = [
+  ...[...wanTestPlatformsPrefixes, ...lanTestPlatformsPrefixes]
+    .filter((prefix) => /dash\.(?:testing\.)?comm100dev\.io$/.test(prefix))
+    .map((prefix) => prefix.replace('dash.', 'partner.')),
+  'https://partner.comm100staging.com'
+];
+
+export function isPartnerHost(value) {
+  return /^(?:partner\.comm100staging\.com|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?partner\.(?:testing\.)?comm100dev\.io)$/i.test(hostnameOf(value));
+}
+
 /** Groups, exactly as the popup's `<select>` renders them. */
 export const PLATFORM_GROUPS = [
   { id: 'wan', label: 'WAN test platforms', prefixes: wanTestPlatformsPrefixes },
   { id: 'lan', label: 'LAN test platforms', prefixes: lanTestPlatformsPrefixes },
-  { id: 'production', label: 'Production', prefixes: productionPlatformsPrefixes }
+  { id: 'production', label: 'Production', prefixes: productionPlatformsPrefixes },
+  { id: 'partner', label: 'Partner portals', prefixes: partnerPlatformsPrefixes }
 ];
 
 /** `https://livechat6dash.testing.comm100dev.io` -> `livechat6dash.testing.comm100dev.io` */

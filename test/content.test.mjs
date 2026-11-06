@@ -113,3 +113,31 @@ test('manifest grants no access to localhost or loopback pages', () => {
   const patterns = [...manifest.host_permissions, ...manifest.content_scripts.flatMap((script) => script.matches)];
   assert(patterns.every((pattern) => pattern === 'https://app.livehelp100service.com/*' || /^https:\/\/\*\.(comm100dev\.io|comm100staging\.com|comm100\.io)\/\*$/.test(pattern)));
 });
+
+test('staging partner forwards captured credentials and API traces to the worker', async () => {
+  const partnerOrigin = 'https://partner.comm100staging.com';
+  const page = setup(`${partnerOrigin}/login`);
+  const data = { source: 'comm100-request-hook', type: 'partner-login',
+    url: `${partnerOrigin}/partnerloginapi/Login`, email: 'partner@example.com', password: 'fixture-password',
+    response: { code: 0, partnerId: 10000, jwtToken: 'fixture.jwt.token' } };
+  const emit = (data, eventOrigin = partnerOrigin) => {
+    const event = new Event('message');
+    Object.assign(event, { source: page.window, origin: eventOrigin, data });
+    page.window.dispatchEvent(event);
+  };
+  emit(data, 'https://other.comm100staging.com');
+  assert.equal(page.messages.length, 0, 'foreign-origin messages are ignored');
+  emit(data);
+  await settle();
+  assert.equal(page.messages[0].type, 'capturePartnerLogin');
+  assert.equal(page.messages[0].email, data.email);
+  assert.equal(page.messages[0].password, data.password);
+  page.history.pushState({}, '', '/ui/10000/partner/dashboard/');
+  await settle();
+  assert(page.messages.some((message) => message.type === 'ensureAuth' && message.domain === 'partner.comm100staging.com'));
+  const trace = { url: `${partnerOrigin}/api/entity/configs`, requestBody: '', responseBody: '{"ok":true}' };
+  emit({ source: 'comm100-request-hook', type: 'api-trace', trace });
+  await settle();
+  assert.equal(page.messages.at(-1).type, 'captureTrace');
+  assert.equal(page.messages.at(-1).trace, trace);
+});

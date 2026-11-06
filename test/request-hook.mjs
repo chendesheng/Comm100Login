@@ -7,9 +7,11 @@ const source = readFileSync(new URL('../src/content/request-hook.js', import.met
 const origin = 'https://livechat6dash.testing.comm100dev.io';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function setup(path = '/ui/99999/entry/') {
+function setup(path = '/ui/99999/entry/', pageOrigin = origin) {
+  const origin = pageOrigin;
   const network = [];
   const traces = [];
+  const logins = [];
   const config = { jwt: 'fresh', delay: 10, checks: 0, renewals: 0 };
   const window = new EventTarget();
   class PageRequest extends Request {
@@ -21,7 +23,7 @@ function setup(path = '/ui/99999/entry/') {
     const request = new PageRequest(input, init);
     const record = { url: request.url, auth: request.headers.get('authorization'), body: await request.text(), method: request.method };
     network.push(record);
-    return new Response(JSON.stringify(record), { status: statusFor(record.url, record.auth) });
+    return new Response(JSON.stringify(config.response || record), { status: statusFor(record.url, record.auth) });
   };
   class FakeXHR extends EventTarget {
     readyState = 0;
@@ -50,7 +52,8 @@ function setup(path = '/ui/99999/entry/') {
         this.status = statusFor(record.url, record.auth);
         this.readyState = 2;
         this.dispatchEvent(new Event('readystatechange'));
-        this.response = this.responseType === 'json' ? record : JSON.stringify(record);
+        this.responseText = JSON.stringify(config.response || record);
+        this.response = this.responseType === 'json' ? (config.response || record) : this.responseText;
         this.readyState = 4;
         this.dispatchEvent(new Event('readystatechange'));
         this.dispatchEvent(new Event('load'));
@@ -68,6 +71,7 @@ function setup(path = '/ui/99999/entry/') {
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (data?.source !== 'comm100-request-hook') return;
+    if (data.type === 'partner-login') { logins.push(data); return; }
     if (data.type === 'api-trace') { traces.push(data.trace); return; }
     if (data.type !== 'session-request') return;
     config.checks++;
@@ -80,7 +84,7 @@ function setup(path = '/ui/99999/entry/') {
   const location = new URL(path, origin);
   vm.runInNewContext(source, { window, location,
     Request: PageRequest, Headers, URL, Event, ProgressEvent: Event, DOMException, setTimeout, clearTimeout });
-  return { window, network, traces, config, PageRequest, location };
+  return { window, network, traces, logins, config, PageRequest, location };
 }
 
 function xhrCall(window, url, auth = 'Bearer expired') {
@@ -255,3 +259,43 @@ for (const host of ['localhost:12050', 'localhost:34500', '127.0.0.1:12050', '[:
   assert(network.every((request) => request.auth === 'Bearer original'));
 }
 console.log('PASS localhost and loopback requests are left untouched');
+
+
+for (const host of ['livechat6partner.testing.comm100dev.io', 'livechat6partner.comm100dev.io', 'partner.comm100staging.com']) {
+  const pageOrigin = `https://${host}`;
+  const page = setup('/ui/10000/partner/dashboard/', pageOrigin);
+  await page.window.fetch('/api/entity/configs', { method: 'POST', body: '{"name":"partner"}' });
+  await xhrCall(page.window, '/api/partners');
+  await sleep(30);
+  assert.equal(page.traces.length, 2);
+  assert.equal(page.traces[0].url, `${pageOrigin}/api/entity/configs`);
+  assert.equal(page.traces[0].requestBody, '{"name":"partner"}');
+  assert.equal(JSON.parse(page.traces[0].responseBody).body, '{"name":"partner"}');
+  assert.equal(page.traces[1].requestBody, 'original body');
+  assert.equal(page.traces[1].statusCode, 200);
+  await page.window.fetch('https://unrelated.example/api/data');
+  await sleep(20);
+  assert.equal(page.traces.length, 2, 'partner traces remain same-origin');
+
+  const login = setup('/login', pageOrigin);
+  login.config.response = { code: 0, partnerId: 10000, jwtToken: 'fixture.jwt.token', expireTime: 'future' };
+  const body = JSON.stringify({ email: 'partner@example.com', password: 'fixture-password' });
+  await login.window.fetch('/partnerloginapi/Login', { method: 'POST', body });
+  await new Promise((resolve) => {
+    const xhr = new login.window.XMLHttpRequest();
+    xhr.open('POST', '/partnerloginapi/Login');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.addEventListener('loadend', resolve);
+    xhr.send(body);
+  });
+  await sleep(30);
+  assert.equal(login.logins.length, 2, 'fetch and XHR both capture successful manual credentials');
+  assert(login.logins.every((message) => message.email === 'partner@example.com' && message.password === 'fixture-password'));
+  assert.equal(login.config.checks, 0, 'manual login does not initiate extension authentication');
+  assert.equal(login.traces.length, 0, 'password submissions are not API traces');
+  login.config.response.code = 101;
+  await login.window.fetch('/partnerloginapi/Login', { method: 'POST', body });
+  await sleep(20);
+  assert.equal(login.logins.length, 2, 'failed passwords are never promoted');
+}
+console.log('PASS partner WAN/LAN/staging requests are traced and successful fetch/XHR logins are captured');

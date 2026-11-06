@@ -4,10 +4,11 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { ClassicLevel } from 'classic-level';
-import { dashboardOriginFor, getByEmail, jwtLogin, needsSecondFactor, normalizeSite, routeOriginFor } from '../shared/api.js';
-import { agentIdFromToken, expirySecondsFor, tokenCookieName, tokenExpireCookieName } from '../shared/cookies.js';
+import { dashboardOriginFor, getByEmail, jwtLogin, partnerLogin, needsSecondFactor, normalizeSite, routeOriginFor } from '../shared/api.js';
+import { agentIdFromToken, jwtPayload, expirySecondsFor, tokenCookieName, tokenExpireCookieName } from '../shared/cookies.js';
 import { compareAccountOrder, effectivePassword, filterAccounts, normalizeDomain, normalizeState } from '../shared/storage.js';
 
+import { isPartnerHost } from '../shared/platforms.js';
 import { cachedToken, tokenIsFresh } from '../shared/tokens.js';
 import { chromeDataDirectory, readBridgeConfig, requestBridge } from './bridge.mjs';
 import { installBridge } from './setup.mjs';
@@ -151,6 +152,7 @@ function isoTime(milliseconds) {
 function tokenDetails(record, now) {
   const details = {
     email: record.email, domain: record.domain, siteId: record.siteId,
+    ...(record.partnerId ? { partnerId: record.partnerId } : {}),
     jwtToken: record.jwtToken, fresh: tokenIsFresh(record, now),
     expireTime: record.expireTime || null, savedAt: isoTime(record.savedAt),
     header: null, payload: null
@@ -200,6 +202,10 @@ function selectAccount(state, identifier, options) {
     matches = exact.length ? exact : matches.filter((account) => !account.siteId);
   }
   if (!matches.length) throw new Error(`No saved account matches ${identifier} with the selected domain/site.`);
+  if (!options.domain && new Set(matches.map((a) => normalizeDomain(a.domain))).size > 1 &&
+      matches.some((a) => isPartnerHost(a.domain))) {
+    throw new Error(`Multiple portals match ${identifier}. Select one with --domain.`);
+  }
   let domain = options.domain;
   const sites = () => new Set(matches.map((account) => account.siteId ? String(account.siteId) : null));
   const domains = new Set(matches.map((account) => normalizeDomain(account.domain)));
@@ -239,6 +245,7 @@ async function resolveLoginSite(state, account, domain, siteId) {
 
 function loginOutput(record, options) {
   if (!options.cookie) return record.jwtToken;
+  if (isPartnerHost(record.domain)) return `partnerToken=${record.jwtToken}`;
   const expiresAt = expirySecondsFor(record.jwtToken, record.expireTime);
   const expireTime = record.expireTime || new Date(expiresAt * 1000).toISOString();
   return `${tokenCookieName(record.siteId)}=${record.jwtToken};${tokenExpireCookieName(record.siteId)}=${encodeURIComponent(expireTime)};siteList=${record.siteId}`;
@@ -249,19 +256,30 @@ export async function login(state, identifier, options, request = requestBridge)
   const account = selected.account;
   const domain = normalizeDomain(account.domain || selected.domain);
   if (!domain) throw new Error('This account has no dashboard recorded. Specify --domain.');
+  const partner = isPartnerHost(domain);
+  if (partner && normalizeDomain(account.domain) !== domain) throw new Error(
+    'No saved partner account on this domain. Sign in through the extension first.');
+  if (partner && options.siteId) throw new Error('Partner login does not accept --siteId. Select the partner portal with --domain.');
   const siteId = options.siteId || (account.siteId ? String(account.siteId) : null);
   const cached = cachedToken(state, account, domain, siteId);
   if (cached) return loginOutput(cached, options);
   const password = effectivePassword(account);
   if (!password) throw new Error('This account has no saved password. Sign in through the extension first.');
-  const site = await resolveLoginSite(state, account, domain, siteId);
-  const response = await jwtLogin(site.portalUrl, { email: account.email, password, siteId: site.siteId });
+  const site = partner ? { portalUrl: dashboardOriginFor(domain), siteId: null }
+    : await resolveLoginSite(state, account, domain, siteId);
+  const response = await (partner ? partnerLogin : jwtLogin)(site.portalUrl,
+    { email: account.email, password, siteId: site.siteId });
   if (needsSecondFactor(response) && !response.jwtToken) throw new Error('Two-factor verification is required. Sign in through the browser.');
   if (!response.jwtToken || response.errorCode || (response.httpStatus && response.httpStatus !== 200)) {
     // Do not echo a server body: it can contain sensitive material. Never retry a credential.
     throw new Error(`Sign-in failed${response.errorCode ? ` (code ${response.errorCode})` : ''}. Check the saved credentials in the extension.`);
   }
-  const record = { accountId: account.id, email: account.email, domain, siteId: String(site.siteId),
+  if (partner && (!/^\d+$/.test(String(response.partnerId)) ||
+      String(jwtPayload(response.jwtToken)?.partnerId) !== String(response.partnerId))) {
+    throw new Error('The partner login service returned an invalid partner identity.');
+  }
+  const record = { accountId: account.id, email: account.email, domain, siteId: partner ? null : String(site.siteId),
+    ...(partner ? { partnerId: String(response.partnerId) } : {}),
     jwtToken: response.jwtToken, expireTime: response.expireTime || null, savedAt: Date.now() };
   if (!tokenIsFresh(record)) throw new Error('The login service returned an expired token or no usable token expiry.');
   await request(options, { type: 'saveToken', token: record });
